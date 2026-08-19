@@ -1,0 +1,76 @@
+# VIOS Desktop — the application.
+#
+#   pip install -r requirements.txt
+#
+# Everything here is needed to *open the app and read the archive*. The GPU stack
+# is deliberately a separate file (requirements-gpu.txt) so the application
+# installs in seconds rather than after a 2.5 GB wheel — a reader that cannot
+# search until torch finishes downloading is the wrong first impression, and most
+# sessions never run a local model at all.
+
+# ── The server ────────────────────────────────────────────────────────────
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9        # the IG export ZIP upload in Capture
+httpx>=0.27                    # Bot API calls; tg_transport and creds use it
+
+# ── The window ────────────────────────────────────────────────────────────
+# pywebview drives Edge WebView2, which ships with Windows 11. The decisive
+# reason it is here rather than a browser tab: create_file_dialog(FOLDER_DIALOG)
+# is a native folder picker, which the local-video-library feature needs and no
+# web page can do.
+pywebview>=5.3
+
+# ── Telegram ──────────────────────────────────────────────────────────────
+# pyrogram is not optional despite the Bot API existing: a bot cannot list channel
+# history and getFile caps at 20 MB, so MTProto is the only route to the archive.
+pyrogram>=2.0.106
+
+# The AES-IGE C extension pyrogram looks for under the name `tgcrypto`. It is
+# ~10× the pure-Python path, which on a mirror that pulls the whole archive down
+# once is the difference between an afternoon and a weekend.
+#
+# **Not `TgCrypto`.** That package publishes no cp312 Windows wheel, so pip tries
+# to build it and stops at `Microsoft Visual C++ 14.0 or greater is required`
+# — measured here on 2026-08-19, and it takes the rest of the install down with
+# it. The pyrofork fork ships `tgcrypto_pyrofork-1.2.8-cp312-cp312-win_amd64.whl`
+# and installs a module named `tgcrypto`, so pyrogram finds it with no code
+# change and the "much slower speed" warning stops.
+tgcrypto-pyrofork>=1.2.8
+
+# ── Reading what Kaggle wrote ─────────────────────────────────────────────
+# Both mandatory on the cold-start path, which is the only way this app ever
+# gets data — so neither is a nice-to-have.
+#
+# numpy: the search matrices. `search.py`, `index.py`, `vsearch.py` and `maps.py`
+# each do their real work in it; without it there is no ranking at all.
+# zstandard: database bundles are zstd. `atlas/ingest.py:356` falls back to a
+# `zstd` binary, which Kaggle's image ships and Windows does not, and
+# `db_restore.py:557` has no fallback at all.
+numpy>=2.0
+zstandard>=0.23
+
+# ── Measurement ───────────────────────────────────────────────────────────
+# sizing/resources.py has a ctypes fallback so this is not strictly required, but
+# psutil is more accurate and reports per-process memory the ctypes path cannot.
+# Measured on this machine: 1.6 GB available of 12 GB installed, which is tighter
+# than the 6 GB GPU — so this number decides real scheduling questions.
+psutil>=6.0
+
+# ── Capture ───────────────────────────────────────────────────────────────
+# Two downloaders because Instagram breaks one at a time and never both at once.
+yt-dlp>=2025.1.15
+gallery-dl>=1.28
+
+# ── Deliberately absent ───────────────────────────────────────────────────
+# torch, transformers, sentence-transformers → requirements-gpu.txt.
+#
+# What that costs, stated so it is not a surprise: **semantic search is
+# unavailable until the GPU file is installed.** `atlas/encoder.py:167` catches
+# the ImportError and logs *"encoder unavailable — …; search will be lexical
+# only"*, so FTS5 keyword search, the library, the graph, the player and the
+# whole reader still work. That degradation is honest and visible rather than a
+# crash, which is why deferring a 2.5 GB download is acceptable here.
+#
+# sklearn and umap → the Maps view only (`atlas/maps.py`). Also optional, also
+# a feature that reports its absence rather than failing.

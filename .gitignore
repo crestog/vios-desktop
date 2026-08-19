@@ -1,0 +1,51 @@
+# Application state lives in %LOCALAPPDATA%\VIOS (see paths.py), never here.
+# These entries are the belt to that braces: if VIOS_LOCAL_HOME is ever pointed
+# at the working tree by mistake, a 30 GB media mirror must not become stageable.
+VIOS-Data/
+vios_home/
+media/video/
+media/proxy/
+media/poster/
+media/sprite/
+media/frames/
+models/
+bundles/
+scratch/
+logs/
+
+# Databases and vector matrices — rebuildable from the channel, and large.
+*.db
+*.db-wal
+*.db-shm
+*.vec
+*.vec.json
+
+# CREDENTIAL MATERIAL. A pyrogram .session file authenticates as the account
+# that created it; it is not a config file, it is a key.
+*.session
+*.session-journal
+.env
+.env.*
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+web/src/api/schema.d.ts
+
+# Git bundles from backup.bat — the backup must not be inside the thing it backs up.
+backups/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
