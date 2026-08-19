@@ -125,9 +125,24 @@ _SOURCE_HINTS = (
 # is written by `ingest`'s payload lane and read only by the image search that
 # builds its index from it. `coverage` is here because it is the processing
 # plane's work table — it says what ran, which means nothing to a search index.
+#
+# `scan_seen` is the incremental scan's memory: one row per Telegram message id
+# with the verdict that settled it. Its `verdict` column is text, and reflection
+# duly volunteered it as a search source on the first run of the new repo —
+# `indexing 2 text source(s): map_point.source, scan_seen.verdict` — which would
+# have put one "absent" or "no-document" passage into search per message in the
+# channel. Thousands of them, all meaningless. Caught by reading the boot log,
+# which is the argument for having one.
+#
+# `map_point` came out of that same log line, and it is an older bug: it is the
+# UMAP projection `maps.py` writes, and its `source` column is a channel label
+# ("speech", "ocr") rather than prose. Left in, it contributes one one-word
+# passage per projected point — up to 180k of them, per `maps.py:114` — every one
+# a duplicate of a label search already has as a facet. It was invisible because
+# it only appears once a map has been built, and nothing read the log that said so.
 _ATLAS_OWN = {"moments", "moments_fts", "bundles", "atlas_meta", "ingest_log",
               "video_index", "graph_nodes", "graph_edges", "parts",
-              "vec_payload", "coverage"}
+              "vec_payload", "coverage", "scan_seen", "map_point"}
 
 _FTS_SHADOW = re.compile(r"_(data|idx|content|docsize|config)$")
 _TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")

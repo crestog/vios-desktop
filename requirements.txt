@@ -16,10 +16,19 @@ httpx>=0.27                    # Bot API calls; tg_transport and creds use it
 
 # ── The window ────────────────────────────────────────────────────────────
 # pywebview drives Edge WebView2, which ships with Windows 11. The decisive
-# reason it is here rather than a browser tab: create_file_dialog(FOLDER_DIALOG)
-# is a native folder picker, which the local-video-library feature needs and no
-# web page can do.
-pywebview>=5.3
+# reason it is here rather than a browser tab: create_file_dialog() with a folder
+# kind is a native folder picker, which the local-video-library feature needs and
+# no web page can do.
+#
+# **6.x, not 5.x.** Two things changed that this code depends on, both measured
+# against the installed 6.2.1 on 2026-08-19:
+#   • `FOLDER_DIALOG` is deprecated in favour of `FileDialog.FOLDER` and warns on
+#     every access. `desktop/__main__.py` prefers the new name.
+#   • `webview.__version__` no longer exists — use
+#     `importlib.metadata.version("pywebview")`.
+# Do not pin this with `--only-binary=:all:`; that resolves to 3.4, which predates
+# both.
+pywebview>=6.2
 
 # ── Telegram ──────────────────────────────────────────────────────────────
 # pyrogram is not optional despite the Bot API existing: a bot cannot list channel

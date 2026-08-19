@@ -1190,7 +1190,11 @@ def _from_file() -> dict:
 
 
 def export_to_env(force: bool = False) -> dict:
-    """Make Kaggle Secrets visible to code that reads only the environment.
+    """Put every stored credential into the environment. Call this first.
+
+    Two stores feed it: the laptop's `~/.vios/credentials.json` (what the Admin
+    form writes) and Kaggle Secrets, which are not environment variables but an
+    API you have to call.
 
     Returns `{field: env var}` for the variables this call actually set — the
     names, never the values, so a launcher can print the result into a notebook
@@ -1244,6 +1248,14 @@ def export_to_env(force: bool = False) -> dict:
         label for label in PASSTHROUGH if os.environ.get(label, "").strip()
     )
     from_kaggle = read_kaggle(skip=satisfied, force=force)["values"]
+    # The laptop's store. `save_local` has always written this file and nothing
+    # ever exported it, so on a machine with no Kaggle Secrets the Admin form
+    # could save all four credentials correctly and the next launch would still
+    # print "Telegram disabled" — the same failure this function was written to
+    # end, reappearing one layer down. Ranked last, which matches `resolve()`
+    # ordering the FILE layer below both ENV and SECRET, so the two cannot
+    # disagree about which source wins.
+    from_file = _from_file()
     exported = {}
     origin = {n for n in os.environ.get(ORIGIN_VAR, "").split(",") if n}
 
@@ -1259,6 +1271,10 @@ def export_to_env(force: bool = False) -> dict:
                 val = str(from_kaggle.get(name, "") or "").strip()
                 if val:
                     origin.add(name)       # so every later process can say so
+            if not val:
+                # Not added to ORIGIN_VAR: that variable answers "did this come
+                # out of Kaggle Secrets", and this did not.
+                val = str(from_file.get(name, "") or "").strip()
             if val:
                 os.environ[canonical] = val
                 exported[name] = canonical

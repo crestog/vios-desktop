@@ -44,6 +44,11 @@ web/src/api/schema.d.ts
 # Git bundles from backup.bat — the backup must not be inside the thing it backs up.
 backups/
 
+# Throwaway verification scripts. Written against whatever was being checked that
+# hour, so they rot immediately and a committed one would only ever mislead. Kept
+# out of /tmp because that resolves to C:\tmp for native Python on Windows.
+.check/
+
 # Editor / OS
 .vscode/
 .idea/

@@ -25,19 +25,46 @@ including the upstream SHA it was verified against.**
 
 | Here | Upstream | Modified? |
 |---|---|---|
-| `atlas/*.py` (15 files, ~11,900 lines) | `atlas/*.py` | `config.py` rewritten for one disk; `ingest.py` scan made incremental |
+| `atlas/*.py` (15 files, ~11,900 lines) | `atlas/*.py` | `config.py` rewritten for one disk; `ingest.py` scan made incremental; `media.py` eviction replaced by a free-space floor; `reflect.py` excludes two derived tables from the text index |
 | `capture/*.py` (12 files, ~5,870 lines) | `vios/capture/*.py` | 3 import rewrites only (`vios.creds`→`creds`, `vios.tgcompat`→`tgcompat`, `vios.process.intake`→`.mtproto`) |
-| `capture/mtproto.py` | `vios/process/intake.py` lines 278–473, class `Channel` | header rewritten, class verbatim |
+| `capture/mtproto.py` | `vios/process/intake.py` lines 278–473, class `Channel` | header rewritten, class verbatim; trimmed at 209 lines (the extraction had over-run into `class Source:`); `SourceError` defined locally (upstream `intake.py:57`, outside the copied range); one function-local `from vios.tgcompat import patch` at `:59` rewritten — the copy script only rewrote top-level imports, and without it every MTProto call dies `Peer id invalid` |
 | `sizing/registry.py` | `vios/process/registry.py` | unchanged |
 | `sizing/resources.py` | `vios/process/resources.py` | `_system_ram_mb()` gained a Windows path; `total_ram_mb()` added |
 | `sizing/base.py` | `vios/process/runners/base.py` | unchanged |
 | `sizing/__init__.py` | `vios/process/__init__.py` (`SCHEMA_VERSION`, `CHANNELS` only) | reduced to the two constants |
 | `tg_transport.py` | same | unchanged |
 | `db_restore.py`, `db_export.py` | same | unchanged |
-| `creds.py` | `vios/creds.py` | unchanged |
+| `creds.py` | `vios/creds.py` | `export_to_env()` now also reads `~/.vios/credentials.json` — see below |
 | `tgcompat.py` | `vios/tgcompat.py` | unchanged |
 | `config.py` | *not copied* — rewritten from 412 lines to the 10 names the lifted code uses |
 | `logger.py` | *not copied* — rewritten without Redis |
+
+### New here, with no upstream counterpart
+
+| Here | What it is |
+|---|---|
+| `paths.py` | The one place that decides where anything lives. Honours `VIOS_LOCAL_HOME`. |
+| `server/app.py` | **One** FastAPI app. Adopts `atlas.server`'s and `capture.routes`'s finished `/api/*` route objects onto a single router (51 + 23 = 74), leaving both old frontends behind, and serves `web/dist` with an SPA fallback so `/watch/<key>?t=` is a real cold-loadable link. Replaces upstream `ui_server.py:940`'s `app.mount("/atlas", _atlas_server.app)`, which was a whole second FastAPI instance. |
+| `server/__main__.py` | `python -m server` — the API with no window, for `npm run dev` to proxy. |
+| `desktop/__main__.py` | The window: credentials → uvicorn on a free port → `webview.create_window`. |
+| `VIOS.bat`, `backup.bat` | Launch, and `git bundle` (there is no remote). |
+
+### Two upstream defects fixed here, worth carrying back if that repo is ever touched
+
+1. **`creds.export_to_env()` never read the local credential file.** `save_local()`
+   has always written `~/.vios/credentials.json` and nothing ever exported it, so on
+   a machine with no Kaggle Secrets the Admin form could store all four credentials
+   correctly and the next launch would still say *"Telegram disabled"* — the exact
+   failure that function's docstring was written to describe, one layer down. The
+   file is now the lowest-priority source, matching `resolve()`'s existing
+   FILE < ENV < SECRET ranking so the two cannot disagree.
+2. **Reflection volunteered two derived tables as full-text search sources.** The
+   first boot here logged `indexing 2 text source(s): map_point.source,
+   scan_seen.verdict`. `map_point` is the UMAP projection and its `source` column is
+   a channel label, not prose — up to 180k one-word passages, per `maps.py:114`.
+   That one is upstream's and was invisible because it only appears once a map has
+   been built and nothing read the log line that said so. Both are now in
+   `reflect._ATLAS_OWN`.
 
 ### What was deliberately **not** copied
 
@@ -106,6 +133,46 @@ rebuild the ledger from the channel, which is what makes "never re-download afte
 months or years" survive the loss of any local database. Both sides must keep
 writing it. `capture/upload.py:build_caption` is the writer;
 `capture/seed.py:parse_caption` is the reader.
+
+---
+
+## Two local invariants that are easy to break and expensive to notice
+
+### The scan cursor may only advance across ground it actually covered
+
+`ingest.scan_and_import()` walks the channel newest-id first. Upstream wrote
+`last_scan_head = head` unconditionally and **never read it back** — `floor` was
+hardcoded to `1` (`ingest.py:1086`), so every relaunch re-fetched metadata for
+thousands of already-classified messages. Reading it is the fix, and it introduces
+a hazard that did not exist while the value was write-only:
+
+`max_messages` caps a walk (`floor = head - max_messages + 1`). If that cap lifts
+the floor above `cursor + 1`, the walk **skipped** everything between, and writing
+the new head would claim coverage of a range nothing ever looked at. That range
+would then be invisible forever — a silent, unrecoverable hole in the archive. So
+`scan_floor()` returns an explicit `advance` flag, and the cursor moves only when
+the walk joined up with the previous one. When it does not, the log says so.
+
+The `scan_seen` table records the verdict per message id (`shard`, `bundle`,
+`asset`, `no-document`, `uninteresting`, `absent`) so plain uploads are not
+re-examined either. **Failures never settle** — a manifest that would not parse is
+usually a torn download, and the next walk is exactly the retry it needs.
+
+### Nothing on local disk is evicted
+
+Upstream `atlas/media.py` ran an LRU cache bounded at `VIDEO_CACHE_GB` (12 GB),
+which is right on Kaggle: the scratch disk is wiped between sessions, so nothing
+was precious and everything could be re-fetched from the channel. On a laptop that
+keeps its disk a quota guarantees the opposite of what it looks like it buys — the
+archive is never actually local, so every session pays Telegram's rate limits over
+again, which is the cost the mirror exists to remove.
+
+So `VIDEO_CACHE_GB` is gone and `_check_floor()` replaces `_maybe_evict()`. It
+measures free space against `paths.FREE_FLOOR_GB`, logs once per transition, and
+**deletes nothing**. A background worker silently dropping videos to make room for
+more of the same videos turns "my archive is safe" into "which ones did it drop?",
+and that question has no answer worth the gigabytes. Reclaiming space is a user
+action in Admin.
 
 ---
 

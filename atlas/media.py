@@ -30,9 +30,14 @@ than FileResponse, because seeking in a `<video>` element requires byte ranges
 and Starlette only grew range support recently. Doing it here works on every
 version, and lets a partially-downloaded file serve the bytes it already has.
 
-Eviction is LRU by access time against `VIDEO_CACHE_GB`. The cache lives on
-Kaggle's scratch disk, which is wiped between sessions anyway, so nothing here
-is precious — every file can be fetched again from the channel.
+**Nothing here is evicted.** Upstream this was an LRU cache bounded at 12 GB,
+which is right on Kaggle's scratch disk — it is wiped between sessions anyway, so
+nothing was precious and every file could be fetched again from the channel. On a
+laptop that keeps its disk, a quota guarantees the opposite of what it looks like
+it buys: the archive is never actually local, so every session pays Telegram's
+rate limits over again. So this is a permanent local mirror with a *floor* rather
+than a ceiling — `_check_floor` warns when the volume gets low and refuses to
+delete anything. See `paths.FREE_FLOOR_GB`.
 """
 
 import mimetypes
@@ -46,11 +51,19 @@ import time
 
 from . import config
 from .tgchannel import log
+import paths
 
 _LOCK = threading.RLock()
 _STATE = {}              # video_key → {status, got, total, note, at}
 _INFLIGHT = {}           # video_key → threading.Event
-_LAST_EVICT = [0.0]
+
+# Disk measurement, cached — see `cache_stats` and `_check_floor` for why both
+# are rate-limited rather than measured on demand. `_DISK` is [when, last dict];
+# `_FLOOR` is the low-space verdict the mirror worker and the status strip share
+# so that "stop pulling" is decided once, not twice with different rounding.
+_DISK_LOCK = threading.Lock()
+_DISK = [0.0, {}]
+_FLOOR = {"low": False, "free_gb": 0.0, "at": 0.0}
 
 # Two at a time. Telegram throttles hard on parallel downloads from one bot,
 # and a wide pool turns into a wall of FloodWait — slower overall than a
@@ -436,7 +449,7 @@ def _download(video_key: str, msg_id: int) -> None:
     if ev:
         ev.set()
     invalidate_resident()
-    _maybe_evict()
+    _check_floor()
 
 
 def ensure(conn: sqlite3.Connection, video_key: str, wait: float = 0.0) -> dict:
@@ -611,73 +624,138 @@ def _touch(path: str) -> None:
 
 
 # The play handler is the one caller outside this module that has a legitimate
-# reason to say "this file was just watched" — eviction should never take the
-# video somebody is looking at.
+# reason to say "this file was just watched". Nothing evicts any more, so this no
+# longer protects the video you are looking at — it is kept because access time is
+# the only record of what actually gets watched, and "least recently played" is a
+# question Admin will want to answer when the disk really does fill up. Costs one
+# `utime` per play.
 touch = _touch
 
 
 def cache_stats() -> dict:
+    """What is on disk, and how much room is left. **Not a cache report.**
+
+    The name is kept because `/api/status` and the log lines already say
+    `cache`, but the meaning inverted with the storage model: there is no
+    `limit_gb` any more, because there is no quota. What replaces it is
+    `free_gb` against `floor_gb` — the point at which the mirror stops pulling.
+    A UI that used to draw "8.4 of 12 GB used" now draws "31 GB local, 44 GB
+    free", which is the honest picture of a permanent local archive.
+
+    Rate-limited to one real measurement every 20 s. This walks five directory
+    trees, and with the archive fully mirrored that is tens of thousands of
+    `stat` calls — cheap once, not cheap on every status poll of a page that
+    polls while you watch a video.
+    """
+    now = _now()
+    with _DISK_LOCK:
+        if now - _DISK[0] < 20 and _DISK[1]:
+            return dict(_DISK[1])
+
+    stores = (("videos", config.VIDEO_CACHE), ("proxies", config.PROXY_DIR),
+              ("posters", config.POSTER_CACHE), ("sprites", config.SPRITE_DIR),
+              ("keyframes", config.KEYFRAME_DIR))
+    by_store = {}
     total = 0
     files = 0
-    try:
-        for name in os.listdir(config.VIDEO_CACHE):
-            p = os.path.join(config.VIDEO_CACHE, name)
-            if os.path.isfile(p):
-                total += os.path.getsize(p)
-                files += 1
-    except OSError:
-        pass
-    return {"files": files, "bytes": total,
-            "gb": round(total / 1073741824, 2),
-            "limit_gb": config.VIDEO_CACHE_GB}
+    for label, folder in stores:
+        n, size = _tree_size(folder)
+        by_store[label] = {"files": n, "gb": round(size / 1073741824, 2)}
+        total += size
+        files += n
+
+    free = paths.free_bytes()
+    out = {"files": files, "bytes": total,
+           "gb": round(total / 1073741824, 2),
+           "free_gb": round(free / 1073741824, 1),
+           "floor_gb": paths.FREE_FLOOR_GB,
+           "low": free < paths.FREE_FLOOR_GB * 1073741824,
+           "stores": by_store}
+    with _DISK_LOCK:
+        _DISK[0] = now
+        _DISK[1] = out
+    return dict(out)
 
 
-def _maybe_evict() -> None:
-    """Drop least-recently-used videos when the cache outgrows its budget.
+def _tree_size(folder: str) -> tuple:
+    """(file count, bytes) under `folder`, tolerant of files vanishing mid-walk.
 
-    Rate-limited to once every 30 s because it stats the whole directory and
-    it runs after every download.
+    The mirror worker writes while the UI reads, so an entry disappearing
+    between `scandir` and `stat` is normal here and must not raise out of a
+    status endpoint.
     """
-    if _now() - _LAST_EVICT[0] < 30:
-        return
-    _LAST_EVICT[0] = _now()
-    limit = config.VIDEO_CACHE_GB * 1073741824
-    try:
-        entries = []
-        total = 0
-        for name in os.listdir(config.VIDEO_CACHE):
-            p = os.path.join(config.VIDEO_CACHE, name)
-            if not os.path.isfile(p):
-                continue
-            st = os.stat(p)
-            entries.append((st.st_atime, st.st_size, p, name))
-            total += st.st_size
-        if total <= limit:
-            return
-        entries.sort()
-        freed = 0
-        for _atime, size, path, name in entries:
-            if total - freed <= limit * 0.85:
-                break
+    files = 0
+    total = 0
+    stack = [folder]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for e in entries:
             try:
-                os.remove(path)
-                freed += size
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(e.path)
+                elif e.is_file(follow_symlinks=False):
+                    total += e.stat().st_size
+                    files += 1
             except OSError:
                 continue
-            # A sparse file's chunk index is the only record of which of its
-            # bytes are real. Removing the file without forgetting the index
-            # would let a later request serve a hole — a run of zeros — as if
-            # it were video. Forget it in the same breath.
-            if name.endswith(".sparse"):
-                stem = name[:-len(".sparse")]
-                key = os.path.splitext(stem)[0]
-                with _SPARSE_LOCK:
-                    _SPARSE.pop(key, None)
-        if freed:
-            invalidate_resident()
-            log(f"video cache trimmed — freed {freed / 1048576:.0f} MB")
-    except OSError:
-        pass
+    return files, total
+
+
+def floor_state() -> dict:
+    """The last verdict from `_check_floor`, for the status strip and the mirror.
+
+    Read-only. The mirror worker checks this before starting another download so
+    that "stop pulling" is one decision made in one place rather than a second
+    disk measurement with its own rounding.
+    """
+    with _DISK_LOCK:
+        return dict(_FLOOR)
+
+
+def _check_floor() -> None:
+    """Warn when the volume gets low. **Deletes nothing.**
+
+    This replaced LRU eviction against a 12 GB cache budget, and the replacement
+    is deliberately not symmetrical: the old one deleted, this one refuses to.
+
+    A quota is right when the disk dies every twelve hours — it means the working
+    set stays small and nothing is lost, because nothing was ever kept. It is
+    wrong on a machine that keeps its disk, because it guarantees the archive is
+    never actually local and every session pays Telegram's rate limits over
+    again. That is the cost the whole mirror exists to remove.
+
+    And a background worker that silently deletes videos to make room for more of
+    the same videos turns "my archive is safe" into "which ones did it drop?",
+    which has no answer worth the gigabytes it saved. So this measures, records,
+    logs once per transition, and stops. Deciding what to remove is the user's,
+    through Admin.
+
+    Rate-limited to once every 15 s: it runs after every completed download and
+    `free_bytes` is a syscall, not free.
+    """
+    now = _now()
+    with _DISK_LOCK:
+        if now - _FLOOR["at"] < 15:
+            return
+        _FLOOR["at"] = now
+        was_low = _FLOOR["low"]
+
+    free = paths.free_bytes()
+    low = free < paths.FREE_FLOOR_GB * 1073741824
+    with _DISK_LOCK:
+        _FLOOR["low"] = low
+        _FLOOR["free_gb"] = round(free / 1073741824, 1)
+
+    if low and not was_low:
+        log(f"disk low — {free / 1073741824:.1f} GB free, floor is "
+            f"{paths.FREE_FLOOR_GB:.0f} GB. The mirror is pausing. Nothing has "
+            f"been deleted: free space, or point VIOS_LOCAL_HOME at another "
+            f"drive.", "WARN")
+    elif was_low and not low:
+        log(f"disk recovered — {free / 1073741824:.1f} GB free, mirror resuming")
 
 
 def clear_cache() -> dict:
@@ -1172,7 +1250,7 @@ def _maybe_promote(video_key: str, part: str, index: set, size: int) -> None:
             _SPARSE.pop(str(video_key), None)
         invalidate_resident()
         log(f"video {video_key} fully cached from streaming")
-        _maybe_evict()
+        _check_floor()
     except OSError:
         pass
 
