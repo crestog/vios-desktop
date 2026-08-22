@@ -803,10 +803,20 @@ export interface StoredCredentials {
     /** `env` | `kaggle` | `file` | `typed` | ''. */
     source: string;
   }>;
+  /** All four Telegram secrets resolve to something. The rest are optional. */
   complete?: boolean;
   local_file?: string;
   local_file_present?: boolean;
   on_kaggle?: boolean;
+  /**
+   * Why the Kaggle secret store answered the way it did, and what to do about
+   * it. Both are `''`/`[]` off Kaggle, which is every launch of this
+   * application — they are declared because the panel renders them when
+   * `on_kaggle` is true rather than guessing that it never is.
+   */
+  kaggle_reason?: string;
+  kaggle_advice?: string[];
+  kaggle_secrets_available?: boolean;
   [k: string]: unknown;
 }
 
@@ -1003,3 +1013,222 @@ export interface BackfillStatus {
     error?: string;
   };
 }
+
+// ── Admin ─────────────────────────────────────────────────────────────────
+// Three groups, matching `server/admin_routes.py`: the credential store, the
+// wire contract with the other program, and restore. Nothing here re-states a
+// shape another route already owns — the imported-sources list is
+// `/api/bundles`, and there is no export type because there is no export route.
+
+/**
+ * What the credential form submits. Every field optional, and that is the
+ * contract: an absent field means *leave that credential alone*, because the
+ * form always renders empty on a machine that already has all six stored.
+ * Sending `''` would be a different instruction, so the form must drop blanks
+ * rather than pass them through.
+ */
+export interface CredentialFields {
+  bot_token?: string;
+  channel_id?: string;
+  api_id?: string;
+  api_hash?: string;
+  hf_token?: string;
+  ig_cookies?: string;
+}
+
+/**
+ * `POST /api/admin/credentials`.
+ *
+ * `stored` and `changed` are different lists and the panel shows both: the
+ * first is every field now in the file, the second only what this submission
+ * touched. `exported` is the environment variables that were set in the same
+ * call — the half that makes the value live in *this* process, which is why
+ * saving does not need a restart.
+ */
+export interface CredentialSaveResult {
+  ok: boolean;
+  path: string;
+  stored: string[];
+  changed: string[];
+  exported: string[];
+  credentials: StoredCredentials;
+}
+
+/** `POST /api/admin/credentials/forget` — disk only; `effect` says so. */
+export interface CredentialForgetResult {
+  ok: boolean;
+  removed: boolean;
+  path: string;
+  effect: string;
+  credentials: StoredCredentials;
+}
+
+/**
+ * `ahead` is the one that matters: the channel holds files written by a newer
+ * processing plane than this build knows how to read. Everything else is
+ * informational.
+ */
+export type WireVerdict = 'unknown' | 'empty' | 'ahead' | 'current' | 'behind';
+
+/**
+ * `GET /api/admin/wire` — can this build still read what the other program
+ * writes?
+ *
+ * `schema.ours` is `sizing.SCHEMA_VERSION`, `highest_seen` is the largest
+ * schema any file that actually imported carried, and `at_commit` is what
+ * WIRE.md recorded when this tree was lifted. `wire_stale` is the quieter
+ * failure of the three: the contract document no longer agreeing with the
+ * constant in the tree means it was not updated with the code.
+ */
+export interface WireReport {
+  ok: boolean;
+  schema: {
+    ours: number;
+    highest_seen: number | null;
+    at_commit: number | null;
+    /** Imported files per schema number. `"unknown"` is a pre-header bundle. */
+    by_schema: Record<string, number>;
+  };
+  verdict: WireVerdict;
+  headline: string;
+  wire_stale: boolean;
+  /** Parsed out of WIRE.md, so `parsed: false` means it was reworded. */
+  provenance: {
+    upstream: string | null;
+    commit: string | null;
+    lifted_on: string | null;
+    schema_at_commit: number | null;
+    path: string;
+    parsed: boolean;
+    note?: string;
+  };
+  imported: {
+    readable: boolean;
+    bundles: number;
+    shards: number;
+    failed: number;
+    bytes: number;
+    newest_at: number | null;
+  };
+  note: string;
+}
+
+/**
+ * One line of `plan.effects` — a store an apply either replaces or leaves
+ * alone. `db_restore._effects` builds these before anything moves, and the
+ * panel renders them verbatim: "restore the database" replaces two stores and
+ * leaves three, and the three it leaves are why a restored session still has to
+ * re-derive vectors before it behaves like the one that made the bundle.
+ */
+export interface RestoreEffect {
+  target: string;
+  /** `replaced` | `untouched`. */
+  action: string;
+  /** `yes` | `no` — a string, not a boolean, because the module writes one. */
+  impact: string;
+  detail: string;
+}
+
+/** What an inspect found: the bundle, against what is already here. */
+export interface RestorePlan {
+  seq: string | null;
+  created_at: string | null;
+  code_commit: string | null;
+  schema: number | null;
+  files: Array<{ name: string; parts: number; size: number }>;
+  download_mb: number;
+  bundle_counts: Record<string, number>;
+  local_counts: Record<string, number>;
+  /** Bundle posts minus local posts. Negative is the dangerous direction. */
+  posts_delta: number | null;
+  destructive: boolean;
+  has_postgres: boolean;
+  effects: RestoreEffect[];
+  /** Present only after an apply: measured afterwards, not forecast. */
+  outcome?: {
+    loaded: string[];
+    counts_after: Record<string, number>;
+    matches_bundle: boolean | null;
+    snapshot: string | null;
+    next_steps: string[];
+  };
+}
+
+/**
+ * `GET /api/admin/restore`.
+ *
+ * `stalled_s` is the age of the last transferred byte, which is the number that
+ * separates a slow download from a dead one. `missing` is recomputed per call,
+ * so this stops saying "Telegram is not configured" one save later without a
+ * restart. `scope` is the sentence the lifted module cannot say: the database
+ * this replaces is not the database the reader reads.
+ */
+export interface RestoreStatus {
+  ok: boolean;
+  state: 'idle' | 'running' | 'ready' | 'done' | 'error';
+  /** `inspect` | `apply` | `''`. */
+  mode: string;
+  stage: string;
+  pct: number;
+  detail: string;
+  started_at: number | null;
+  finished_at: number | null;
+  plan: RestorePlan | null;
+  error: string | null;
+  log: string[];
+  last_progress_at: number | null;
+  stalled_s: number;
+  /** Environment variable names, e.g. `VIOS_BOT_TOKEN`. */
+  missing: string[];
+  scope: string;
+  target: string;
+}
+
+/** Both restore POSTs answer as soon as the thread is running. */
+export interface RestoreStarted {
+  ok: boolean;
+  mode: string;
+  seq?: string | null;
+  scope: string;
+}
+
+/**
+ * One row of `/api/bundles` — a bundle **or** a shard. They share the table and
+ * are told apart by the `seq` prefix: `import_shard` writes `"shard:…"` into the
+ * same eleven columns a manifest import uses. `status` is `ok` or `failed`, and
+ * a failure is never settled — the next scan retries it, because the usual cause
+ * is a torn download.
+ */
+export interface BundleRow {
+  seq: string;
+  manifest_id: number | null;
+  schema: number | null;
+  created_at: string | null;
+  code_commit: string | null;
+  parts: number | null;
+  bytes: number | null;
+  counts: Record<string, number>;
+  imported_at: number | null;
+  status: string;
+  note: string | null;
+}
+
+/**
+ * `/api/bundles` — note there is no `ok` key; this route predates that
+ * convention and returns its two lists bare.
+ */
+export interface BundlesResponse {
+  bundles: BundleRow[];
+  /** Every column reflection put in the text index, and how it got there. */
+  sources: Array<{
+    table: string;
+    text: string;
+    /** The evidence kind, where a table labels its rows (`claim.channel`). */
+    source: string | null;
+    key: string;
+    /** Name of the column carrying the moment's start, or null if untimed. */
+    start: string | null;
+    via: string | null;
+  }>;
+}
+

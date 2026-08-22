@@ -138,6 +138,23 @@ input, button, select, textarea {
   border-color: var(--border-active);
   color: var(--text-pure);
 }
+/* Nothing in the app styled a disabled button, so "Save 0 credentials" and
+   "Inspect" mid-run looked exactly as pressable as the live ones. `pointer-events`
+   stays on deliberately: a disabled control is usually the one whose `title`
+   explains why it is disabled, and `none` would swallow that tooltip. */
+.btn:disabled,
+.btn-ghost:disabled {
+  color: var(--text-disabled);
+  border-color: var(--border-subtle);
+  background: var(--surface-1);
+  cursor: not-allowed;
+}
+.btn:disabled:hover,
+.btn-ghost:disabled:hover {
+  color: var(--text-disabled);
+  border-color: var(--border-subtle);
+  background: var(--surface-1);
+}
 .btn-primary {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
@@ -154,6 +171,25 @@ input, button, select, textarea {
 .btn-icon {
   padding: 6px;
   border-radius: var(--radius-sm);
+}
+/* Destructive. An outline rather than a fill, because a solid red button is the
+   same shape and weight as the safe one beside it and gets hit by muscle memory;
+   the fill arrives on hover, once the pointer has already chosen it. Every use of
+   this class in the app sits behind a two-step confirm. */
+.btn-danger {
+  color: var(--state-error);
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.btn-danger:hover {
+  background: var(--state-error);
+  border-color: var(--state-error);
+  color: #1b0808;
+}
+.btn-danger:disabled {
+  color: var(--text-disabled);
+  background: var(--surface-1);
+  border-color: var(--border-default);
 }
 
 /* ── Form Inputs ── */
@@ -1585,6 +1621,385 @@ input, button, select, textarea {
   .cap-view .split { flex-direction: column; }
   .cap-view .rail-left { width: 100%; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
   .cap-view .cap-rail { max-height: 320px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ADMIN — four sections at four addresses
+   The rail here is navigation, not selection: each item is an `<a href>` to
+   `/admin?section=…`, so the browser's own back button walks between the
+   credential form and the wire report. That is why these rules restyle `.tbl`
+   rather than introducing a new item shape — the affordance is identical to
+   Data's table list, and only the label's typeface changes, because "Credentials"
+   is a word and not an identifier.
+   ══════════════════════════════════════════════════════════════════════ */
+.adm-tab .tbl-n {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+}
+.adm-tab { padding: 7px 9px; }
+.adm-tab svg { flex-shrink: 0; color: var(--text-tertiary); }
+.adm-tab.is-active svg { color: var(--accent-primary); }
+
+/* The two paths this screen writes to, kept in view while the sections above
+   scroll. They are the only absolute paths in the app's chrome, and they are
+   here because both destructive controls name a file: a confirm that says
+   "delete the stored file?" is only answerable if the file is on screen. */
+.adm-rail-foot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding: 9px 11px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.adm-rail-foot .dim {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.adm-rail-foot .dim + .adm-path { margin-bottom: 5px; }
+.adm-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.adm-main { max-width: 940px; gap: 14px; }
+/* `.dtable-wrap` grows by default, which is right when a table *is* the view.
+   Sources stacks two of them under prose, and two growing boxes inside one
+   scrolling column split the height and give each its own inner scrollbar. Here
+   the column scrolls and the tables are as tall as their rows. */
+.adm-main .dtable-wrap { flex: none; }
+.adm-sec2 { margin-top: 10px; }
+
+.adm-mono { font-family: var(--font-mono); font-size: 11.5px; }
+.adm-ok { color: var(--state-success); }
+.adm-bad { color: var(--state-error); }
+
+/* One pill shape, two vocabularies. `adm-v-*` is the wire verdict, `adm-r-*` is
+   the restore job's state; two of the five pairs would render identically and
+   they are still separate families, because they answer different questions and a
+   shared green invites reusing one where the other belongs. */
+.adm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+}
+.adm-v-ok    { color: var(--state-success); background: rgba(74, 222, 128, 0.1);  border-color: rgba(74, 222, 128, 0.3); }
+.adm-v-info  { color: var(--state-info);    background: rgba(96, 165, 250, 0.1);  border-color: rgba(96, 165, 250, 0.3); }
+.adm-v-bad   { color: var(--state-error);   background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.36); }
+.adm-v-warn  { color: var(--state-warning); background: rgba(251, 191, 36, 0.1);  border-color: rgba(251, 191, 36, 0.3); }
+.adm-v-idle  { color: var(--text-tertiary); background: transparent;              border-color: var(--border-subtle); }
+.adm-r-idle  { color: var(--text-tertiary); background: transparent;              border-color: var(--border-subtle); }
+.adm-r-run   { color: var(--accent-primary); background: var(--accent-glow);      border-color: rgba(129, 140, 248, 0.4); }
+.adm-r-ready { color: var(--state-info);    background: rgba(96, 165, 250, 0.1);  border-color: rgba(96, 165, 250, 0.3); }
+.adm-r-done  { color: var(--state-success); background: rgba(74, 222, 128, 0.1);  border-color: rgba(74, 222, 128, 0.3); }
+.adm-r-err   { color: var(--state-error);   background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.36); }
+
+/* The wire's answer, stated once at full width. The left border carries the
+   verdict's colour so the state survives being read at a glance from across the
+   desk, which is the only way this panel is ever read. */
+.adm-verdict {
+  border: 1px solid var(--border-subtle);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  padding: 12px 14px;
+}
+.adm-verdict-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  margin-bottom: 5px;
+}
+.adm-verdict p { font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); margin: 0; }
+.adm-verdict.adm-v-ok   { border-left-color: var(--state-success); background: rgba(74, 222, 128, 0.05); }
+.adm-verdict.adm-v-bad  { border-left-color: var(--state-error);   background: rgba(248, 113, 113, 0.06); }
+.adm-verdict.adm-v-info { border-left-color: var(--state-info);    background: rgba(96, 165, 250, 0.05); }
+.adm-verdict.adm-v-warn { border-left-color: var(--state-warning); background: rgba(251, 191, 36, 0.05); }
+.adm-verdict.adm-v-idle { border-left-color: var(--border-active); }
+
+/* An inline warning that is not an error: WIRE.md drifting, a plan that would
+   lose rows, Telegram not configured. Amber rather than red, and it never
+   replaces content — it sits above the controls it is about, so the buttons stay
+   reachable. Three of these can be on screen at once, which is why the type is
+   the same size as body text and not a headline. */
+.adm-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 13px;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.07);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.adm-warn svg { color: var(--state-warning); flex-shrink: 0; margin-top: 2px; }
+.adm-warn strong { color: var(--state-warning); font-weight: 600; }
+.adm-warn a { color: var(--border-focus); }
+.adm-warn code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+}
+
+.adm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+}
+.adm-chip b { color: var(--text-primary); font-weight: 600; }
+/* A shard is not a bundle and the seq prefix is the only thing that says so, so
+   the badge carries that distinction into the row itself. */
+.adm-chip-sh {
+  margin-right: 6px;
+  color: var(--ch-concept);
+  border-color: rgba(94, 234, 212, 0.28);
+  background: rgba(94, 234, 212, 0.08);
+}
+
+.adm-panel { padding: 12px 15px 14px; }
+.adm-panel .panel-h svg { color: var(--text-tertiary); }
+.adm-panel .view-hint { margin: 11px 0 0; }
+.adm-panel .adm-chips { margin-top: 11px; }
+.adm-panel .meter { margin: 2px 0 0; }
+.adm-scope { font-size: 12.5px; line-height: 1.65; }
+
+.adm-prog {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 9px;
+}
+.adm-prog b { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); }
+.adm-prog .dim { line-height: 1.5; }
+
+/* The job's own log, collapsed. It is the only place a FloodWait or a psql
+   failure says what it actually was, so it must be reachable — and it is a wall
+   of monospace, so it must not be the first thing on screen. */
+.adm-log summary {
+  cursor: pointer;
+  padding: 4px 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.adm-log summary:hover { color: var(--text-primary); }
+.adm-log pre {
+  margin: 6px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* `replaced` amber, `untouched` grey, fixed width so the column reads as a
+   column: the useful way to read this list is to scan the verbs first and then
+   the two or three lines that say `replaced`. */
+.adm-effect { align-items: flex-start; }
+.adm-eff {
+  flex-shrink: 0;
+  width: 74px;
+  padding: 3px 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-tertiary);
+}
+.adm-eff.is-repl {
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.09);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+.adm-eff-body { min-width: 0; }
+.adm-eff-body b { font-size: 12.5px; font-weight: 600; }
+.adm-eff-body .dim { margin-top: 2px; line-height: 1.55; }
+
+.adm-outcome { border-color: rgba(74, 222, 128, 0.24); }
+.adm-outcome .panel-h { color: var(--state-success); }
+.adm-outcome .panel-h svg { color: var(--state-success); }
+.adm-steps {
+  margin: 11px 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.adm-steps li { margin-bottom: 3px; }
+
+/* A failed import is not an error state — the next scan retries it — so the row
+   is tinted, not struck out or hidden. */
+.adm-failed td { background: rgba(248, 113, 113, 0.06); }
+.adm-failed td:first-child { box-shadow: inset 2px 0 0 var(--state-error); }
+
+/* ── Credentials ──
+   Every row is label · origin · description · input, in that order. The origin
+   chip is the only output this form has — values go in and never come out — so it
+   sits on the label line, where an echoed value would otherwise be. "not set" is
+   a dashed outline and a set credential is filled: the difference has to survive
+   being seen out of the corner of an eye, because it is the answer to the one
+   question this screen exists to answer. */
+.adm-group {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: 12px 15px 15px;
+}
+.adm-group-h {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  margin-bottom: 13px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.adm-group-h strong { font-size: 12.5px; }
+
+.adm-field + .adm-field {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.adm-field-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.adm-field-h label { font-size: 12.5px; font-weight: 500; color: var(--text-primary); }
+.adm-field-d { margin: 3px 0 7px; font-size: 11.5px; line-height: 1.5; color: var(--text-tertiary); }
+.adm-field .input-text { width: 100%; }
+.adm-input { font-family: var(--font-mono); font-size: 12px; }
+.adm-blob {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.adm-src {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-full);
+  border: 1px dashed var(--border-default);
+  color: var(--text-disabled);
+  cursor: help;
+}
+.adm-src.is-set {
+  border-style: solid;
+  color: var(--state-success);
+  border-color: rgba(74, 222, 128, 0.3);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.adm-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* The armed half of a two-step delete. It replaces the button in place rather
+   than opening a dialog, so the file name being confirmed is on the same line as
+   the word "Yes" and cannot be read out of context. */
+.adm-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 11px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.06);
+  border-radius: var(--radius-full);
+}
+.adm-confirm .dim {
+  max-width: 280px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-msg {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+.adm-msg svg { flex-shrink: 0; }
+.adm-msg .btn-ghost { margin-left: auto; flex-shrink: 0; }
+.adm-msg.is-ok {
+  color: var(--state-success);
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(74, 222, 128, 0.07);
+}
+.adm-msg.is-err {
+  color: var(--state-error);
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.07);
+}
+.adm-note { line-height: 1.65; }
+.adm-note em { color: var(--text-primary); font-style: normal; font-weight: 500; }
+.adm-kaggle .dim { line-height: 1.6; }
+
+/* The rail is navigation and the sections are prose, so below 820 px the rail
+   becomes a row of tabs above the content rather than disappearing. */
+@media (max-width: 820px) {
+  .adm-view .split { flex-direction: column; }
+  .adm-view .rail-left {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .adm-view .rail-body { display: flex; gap: 6px; overflow-x: auto; }
+  .adm-view .adm-tab { flex-shrink: 0; }
+  .adm-view .adm-tab .tbl-r { display: none; }
+  .adm-rail-foot { display: none; }
 }
 
 /* ── Accessibility floor ── */

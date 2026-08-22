@@ -24,6 +24,7 @@
 import type {
   ArchiveStatus,
   BackfillStatus,
+  BundlesResponse,
   CaptureCollection,
   CaptureCounts,
   CaptureEvent,
@@ -34,6 +35,9 @@ import type {
   CaptureTask,
   CellProvenance,
   ComponentCatalogue,
+  CredentialFields,
+  CredentialForgetResult,
+  CredentialSaveResult,
   DerivedState,
   DiskUsage,
   EngineJob,
@@ -51,6 +55,8 @@ import type {
   LocalVideo,
   MirrorStatus,
   PreflightResponse,
+  RestoreStarted,
+  RestoreStatus,
   RoadmapGoal,
   RoadmapMarkResponse,
   RoadmapResponse,
@@ -58,9 +64,11 @@ import type {
   SchemaResponse,
   SearchResponse,
   SpriteMeta,
+  StoredCredentials,
   TableResponse,
   VideoDetail,
   WatchedFolder,
+  WireReport,
 } from '../types';
 
 const API = '/api';
@@ -159,7 +167,7 @@ export const getFacets = (signal?: AbortSignal) =>
   request<FacetsResponse>('/facets', {}, signal);
 
 export const getBundles = (signal?: AbortSignal) =>
-  request<{ ok: boolean; bundles: Array<Record<string, unknown>> }>('/bundles', {}, signal);
+  request<BundlesResponse>('/bundles', {}, signal);
 
 export const getChannelInfo = (signal?: AbortSignal) =>
   request<Record<string, unknown>>('/channel', {}, signal);
@@ -527,6 +535,55 @@ export const getDisk = (signal?: AbortSignal) =>
 
 export const getHost = (refresh = false, signal?: AbortSignal) =>
   request<HostFacts>(`/desktop/host${qs({ refresh })}`, {}, signal);
+
+// ── Admin ─────────────────────────────────────────────────────────────────
+// JSON, unlike capture's writes: `server/admin_routes.py` declares a pydantic
+// model rather than `Form(...)` fields, because there is no file upload here
+// and a credential is better typed once than spread across six form parts.
+
+/** Presence and origin for all six secrets. Never a value. */
+export const getCredentials = (signal?: AbortSignal) =>
+  request<StoredCredentials>('/admin/credentials', {}, signal);
+
+/**
+ * Store credentials, and make them live in the same call.
+ *
+ * Blank fields must be **dropped before calling this**, not sent as `''`: the
+ * server treats an absent field as "leave that credential alone", which is what
+ * lets a form that starts empty change one secret without deleting five.
+ */
+export const saveCredentials = (fields: CredentialFields) =>
+  request<CredentialSaveResult>('/admin/credentials', {
+    method: 'POST',
+    body: JSON.stringify(fields),
+  });
+
+/** Delete the stored file. Does not unset this process's environment. */
+export const forgetCredentials = () =>
+  request<CredentialForgetResult>('/admin/credentials/forget', { method: 'POST' });
+
+/** Schema numbers on both sides of the channel, and the verdict. */
+export const getWire = (signal?: AbortSignal) =>
+  request<WireReport>('/admin/wire', {}, signal);
+
+export const getRestore = (signal?: AbortSignal) =>
+  request<RestoreStatus>('/admin/restore', {}, signal);
+
+/** Read the newest manifest and compute a plan. Writes nothing. */
+export const inspectRestore = () =>
+  request<RestoreStarted>('/admin/restore/inspect', { method: 'POST' });
+
+/**
+ * Destructive. `confirm` is always true here — the guard is that this function
+ * is only reachable from a button the panel renders after a plan is on screen.
+ * `seq` pins the bundle the user was actually looking at, so a panel left open
+ * for ten minutes does not apply whatever the channel holds now.
+ */
+export const applyRestore = (seq?: string | null) =>
+  request<RestoreStarted>('/admin/restore/apply', {
+    method: 'POST',
+    body: JSON.stringify({ confirm: true, seq: seq ?? null }),
+  });
 
 // ── Capture ───────────────────────────────────────────────────────────────
 /**
