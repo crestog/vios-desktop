@@ -94,6 +94,28 @@ export function fmtDate(when: number | null | undefined): string {
   return new Date(ms).toLocaleString();
 }
 
+/**
+ * "in 4h" — the forward-facing counterpart to {@link fmtAgo}.
+ *
+ * A separate function rather than a sign check inside `fmtAgo`, because the two
+ * answer different questions and the wrong one reads as a bug: a capture row
+ * parked until tomorrow is *scheduled*, and rendering that as "23h ago" (or as
+ * `fmtAgo`'s "just now" for any future time) says the retry already happened.
+ * Same seconds-or-milliseconds tolerance, for the same reason.
+ */
+export function fmtIn(when: number | null | undefined): string {
+  if (!when || !Number.isFinite(when)) return '';
+  const ms = when > 1e12 ? when : when * 1000;
+  const s = Math.round((ms - Date.now()) / 1000);
+  if (s <= 0) return 'due now';
+  if (s < 90) return `in ${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `in ${m}m`;
+  const h = Math.round(s / 3600);
+  if (h < 48) return `in ${h}h`;
+  return `in ${Math.round(s / 86400)}d`;
+}
+
 export function fmtPct(part: number, whole: number, digits = 0): string {
   if (!whole) return '—';
   return `${((part / whole) * 100).toFixed(digits)}%`;

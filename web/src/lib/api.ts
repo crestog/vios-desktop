@@ -23,6 +23,15 @@
 
 import type {
   ArchiveStatus,
+  BackfillStatus,
+  CaptureCollection,
+  CaptureCounts,
+  CaptureEvent,
+  CaptureFailure,
+  CaptureQueueResponse,
+  CaptureSettings,
+  CaptureStatus,
+  CaptureTask,
   CellProvenance,
   ComponentCatalogue,
   DerivedState,
@@ -41,6 +50,7 @@ import type {
   LibraryResponse,
   LocalVideo,
   MirrorStatus,
+  PreflightResponse,
   RoadmapGoal,
   RoadmapMarkResponse,
   RoadmapResponse,
@@ -84,13 +94,18 @@ export function isAborted(e: unknown): boolean {
 
 async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
   const url = path.startsWith('/api') ? path : `${API}${path}`;
+  // FormData must be sent *without* a Content-Type: the browser generates one
+  // with the multipart boundary, and stating `application/json` over it makes
+  // FastAPI's `Form(...)` parameters arrive empty. Every `/api/capture/*` write
+  // takes a form, so this is not a special case — it is half the POSTs.
+  const isForm = init.body instanceof FormData;
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
       signal,
       headers:
-        init.body !== undefined
+        init.body !== undefined && !isForm
           ? { 'Content-Type': 'application/json', ...(init.headers || {}) }
           : init.headers,
     });
@@ -106,7 +121,11 @@ async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSi
     let detail = res.statusText || `HTTP ${res.status}`;
     try {
       const body = await res.json();
-      detail = body?.detail || body?.note || body?.message || detail;
+      // Four keys because three subsystems disagree: FastAPI raises `detail`,
+      // atlas returns `note`, `capture/routes.py:_err` returns `error`. Reading
+      // only the first two turns capture's careful "Save the bot token and
+      // channel id first." into a bare "Bad Request".
+      detail = body?.detail || body?.note || body?.error || body?.message || detail;
     } catch {
       /* a non-JSON error body is normal for a 500 traceback page */
     }
@@ -509,6 +528,169 @@ export const getDisk = (signal?: AbortSignal) =>
 export const getHost = (refresh = false, signal?: AbortSignal) =>
   request<HostFacts>(`/desktop/host${qs({ refresh })}`, {}, signal);
 
+// ── Capture ───────────────────────────────────────────────────────────────
+/**
+ * Every write here is a **form**, not JSON — `capture/routes.py` declares its
+ * parameters with FastAPI's `Form(...)`, and the reason is the file upload on
+ * `/api/capture/import`: a route that accepts `UploadFile` is multipart, so all
+ * of them were written that way for consistency.
+ *
+ * The blank-means-leave-alone rule on `/api/capture/config` is why this drops
+ * `undefined` rather than sending it as `"undefined"`: the operator changing the
+ * pace on day four must not have to re-type a bot token to do it.
+ */
+function form(fields: Record<string, string | number | boolean | undefined | null>): FormData {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined || v === null) continue;
+    fd.set(k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
+  }
+  return fd;
+}
+
+export const getCaptureStatus = (signal?: AbortSignal) =>
+  request<CaptureStatus>('/capture/status', {}, signal);
+
+export const getCaptureTask = (signal?: AbortSignal) =>
+  request<CaptureTask>('/capture/task', {}, signal);
+
+export const getCaptureQueue = (
+  args: { state?: string; limit?: number; offset?: number } = {},
+  signal?: AbortSignal
+) => request<CaptureQueueResponse>(`/capture/queue${qs(args)}`, {}, signal);
+
+export const getCaptureActivity = (limit = 60, signal?: AbortSignal) =>
+  request<{ ok: boolean; events: CaptureEvent[] }>(
+    `/capture/activity${qs({ limit })}`,
+    {},
+    signal
+  );
+
+export const getCaptureFailures = (limit = 120, signal?: AbortSignal) =>
+  request<{ ok: boolean; failures: CaptureFailure[] }>(
+    `/capture/failures${qs({ limit })}`,
+    {},
+    signal
+  );
+
+export const getCaptureCollections = (signal?: AbortSignal) =>
+  request<{ ok: boolean; collections: CaptureCollection[] }>(
+    '/capture/collections',
+    {},
+    signal
+  );
+
+/** POST, not GET: it probes Telegram and the disk, so it is not idempotent. */
+export const capturePreflight = () =>
+  request<PreflightResponse>('/capture/preflight', { method: 'POST' });
+
+/** Only the fields you pass are changed. Never send a token you did not type. */
+export interface CaptureConfigFields {
+  bot_token?: string;
+  channel_id?: string | number;
+  api_id?: string | number;
+  api_hash?: string;
+  cookies_text?: string;
+  target_seconds?: number;
+  quiet_hours?: boolean;
+  breaks?: boolean;
+  /** Comma-separated. An empty string is not "clear" — it is "leave alone". */
+  skip_collections?: string;
+  max_attempts?: number;
+  gallery_dl?: boolean;
+  /** `fast` or `safe`; anything else is ignored by the server as a typo. */
+  speed?: string;
+}
+
+export const saveCaptureConfig = (fields: CaptureConfigFields) =>
+  request<{ ok: boolean; settings: CaptureSettings }>('/capture/config', {
+    method: 'POST',
+    body: form(fields as Record<string, string | number | boolean | undefined>),
+  });
+
+export const startCapture = (seed_first = true) =>
+  request<{ ok: boolean; state: string; message: string }>('/capture/start', {
+    method: 'POST',
+    body: form({ seed_first }),
+  });
+
+export const pauseCapture = () =>
+  request<{ ok: boolean; state: string }>('/capture/pause', { method: 'POST' });
+
+export const resumeCapture = () =>
+  request<{ ok: boolean; state: string }>('/capture/resume', { method: 'POST' });
+
+export const stopCapture = () =>
+  request<{ ok: boolean; state: string }>('/capture/stop', { method: 'POST' });
+
+// The three ways in. All three answer `{ok, started}` immediately and then run
+// on the task thread — parsing a 20 MB export inline would park the event loop
+// and freeze the status poll at the moment progress most needs to be visible.
+export const importCaptureText = (text: string) =>
+  request<{ ok: boolean; started: string }>('/capture/import', {
+    method: 'POST',
+    body: form({ text }),
+  });
+
+export const importCapturePath = (path: string) =>
+  request<{ ok: boolean; started: string }>('/capture/import', {
+    method: 'POST',
+    body: form({ path }),
+  });
+
+export const importCaptureFile = (file: File) => {
+  const fd = new FormData();
+  fd.set('file', file);
+  return request<{ ok: boolean; started: string }>('/capture/import', {
+    method: 'POST',
+    body: fd,
+  });
+};
+
+/** Adopt everything the channel already holds, so nothing is captured twice. */
+export const seedCaptureChannel = () =>
+  request<{ ok: boolean; started: string }>('/capture/seed/channel', { method: 'POST' });
+
+/** Forget the scan watermark: the next scan re-reads the channel from message 1. */
+export const rescanCaptureChannel = () =>
+  request<{ ok: boolean; message: string }>('/capture/seed/rescan', { method: 'POST' });
+
+export const requeueCapture = (state = 'failed') =>
+  request<{ ok: boolean; requeued: number }>('/capture/requeue', {
+    method: 'POST',
+    body: form({ state }),
+  });
+
+/** Push the ledger to the channel now, rather than waiting for the interval. */
+export const snapshotCapture = () =>
+  request<{ ok: boolean; message: string }>('/capture/snapshot', { method: 'POST' });
+
+/**
+ * Pull the pinned ledger out of the channel and put it in place.
+ *
+ * Destructive enough to belong on the Admin tab and not this one: the local
+ * ledger is moved aside, not merged. The server refuses while a run is live.
+ */
+export const restoreCaptureLedger = () =>
+  request<{ ok: boolean; counts: CaptureCounts; message: string }>('/capture/restore', {
+    method: 'POST',
+  });
+
+/** A download, so it is an href rather than a fetch. */
+export const captureExportUrl = () => `${API}/capture/export`;
+
+export const getBackfillStatus = (signal?: AbortSignal) =>
+  request<BackfillStatus>('/capture/backfill', {}, signal);
+
+export const startBackfill = (limit = 0) =>
+  request<{ ok: boolean; state: string; message: string }>('/capture/backfill/start', {
+    method: 'POST',
+    body: form({ limit }),
+  });
+
+export const stopBackfill = () =>
+  request<{ ok: boolean; state: string }>('/capture/backfill/stop', { method: 'POST' });
+
 // ── The native shell ──────────────────────────────────────────────────────
 declare global {
   interface Window {
@@ -517,6 +699,7 @@ declare global {
         pick_folder?: () => Promise<string>;
         open_home?: () => Promise<string>;
         open_path?: (p: string) => Promise<string>;
+        open_url?: (u: string) => Promise<string>;
       };
     };
   }
@@ -561,6 +744,28 @@ export async function openPath(p: string): Promise<void> {
   } catch {
     /* nothing to do in a browser tab */
   }
+}
+
+/**
+ * Open a reel's permalink outside the app.
+ *
+ * Never an `<a href>`: inside the desktop window an external link navigates the
+ * *application* to instagram.com and there is no back button. The bridge sends
+ * it to the real browser instead, and refuses anything that is not an https
+ * Instagram URL. Under `npm run dev` there is no bridge, so it falls back to
+ * `window.open`, which in a tab is the correct behaviour anyway.
+ */
+export async function openUrl(url: string): Promise<void> {
+  const bridge = window.pywebview?.api?.open_url;
+  if (bridge) {
+    try {
+      await bridge(url);
+    } catch {
+      /* the bridge logs its own refusals */
+    }
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 export type { Facet };

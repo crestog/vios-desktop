@@ -1099,6 +1099,494 @@ input, button, select, textarea {
 .sys-ok { color: var(--text-disabled); }
 .sys-held { color: var(--state-warning); cursor: help; }
 
+/* ══════════════════════════════════════════════════════════════════════
+   CAPTURE — a week-long process, not a progress bar
+
+   The rail is the widest in the app because it holds a form: four credential
+   fields and two textareas, and a wrapped `password` input is the one control
+   here that must not reflow while being typed into.
+
+   The state palette below is the load-bearing part, and it is deliberately not
+   the obvious mapping. `failed` is **amber**, `unavailable` is **red**. A failed
+   row retries itself — a ladder, then up to six revivals four hours apart — so
+   it needs no human and must not read as damage. An unavailable row is a post Instagram deleted, and it is the only one of the six that will never
+   change on its own. Red is therefore reserved for "a human is the only thing
+   that can move this", which is what makes the counts row scannable at a
+   glance: red digits mean go look, amber digits mean the machine is coping.
+   ══════════════════════════════════════════════════════════════════════ */
+.cap-view { --rail-w: 324px; }
+
+.cap-controls { display: flex; align-items: center; gap: 6px; }
+.cap-bar-note { font-size: 11px; }
+
+/* The pace, made visible in the one place nobody can miss. A capture that is
+   deliberately idle for ninety seconds looks identical to one that has hung,
+   and this is the difference. */
+.cap-wait {
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--state-info);
+  background: rgba(96, 165, 250, 0.1);
+  border: 1px solid rgba(96, 165, 250, 0.24);
+}
+
+.cap-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+}
+.cap-pill::before { content: '●'; font-size: 8px; line-height: 1; }
+.cap-pill.is-live::before { animation: pulse-soft 1.8s ease-in-out infinite; }
+.cap-pill-running {
+  color: var(--state-success);
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.28);
+}
+.cap-pill-paused {
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+.cap-pill-stopping {
+  color: var(--state-info);
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgba(96, 165, 250, 0.28);
+}
+.cap-pill-error {
+  color: var(--state-error);
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+.cap-pill-idle,
+.cap-pill-off {
+  color: var(--text-tertiary);
+  background: var(--surface-1);
+  border-color: var(--border-default);
+}
+.cap-pill-unknown {
+  color: var(--text-disabled);
+  background: transparent;
+  border-color: var(--border-subtle);
+}
+
+/* ── The rail: presence, pace, readiness, sources ── */
+.cap-rail { display: flex; flex-direction: column; gap: 10px; }
+.cap-panel { padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; }
+.cap-panel .kv { grid-template-columns: minmax(72px, auto) 1fr; gap: 4px 10px; font-size: 11px; }
+.cap-panel .kv dd { font-size: 11px; }
+.cap-kv .cap-hot { color: var(--state-warning); font-weight: 600; }
+
+.cap-profile {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.prof-fast { color: var(--state-warning); background: rgba(251, 191, 36, 0.12); }
+.prof-safe { color: var(--state-success); background: rgba(74, 222, 128, 0.1); }
+.cap-skips { font-size: 10px; line-height: 1.7; }
+.cap-skip {
+  display: inline-block;
+  margin: 0 3px 0 0;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+}
+
+/* Credentials: presence and origin, never a value. The dot is the whole
+   report — "is it there" is the only question this panel answers, because
+   answering "what is it" would put a live token in every screenshot. */
+.cap-creds { display: flex; flex-direction: column; gap: 4px; }
+.cap-cred {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  cursor: help;
+}
+.cap-cred .dim { font-family: var(--font-mono); font-size: 10px; }
+.cap-cred-n { color: var(--text-secondary); }
+.cap-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  background: var(--border-active);
+}
+.cap-dot.is-on { background: var(--state-success); }
+
+.cap-form { display: flex; flex-direction: column; gap: 7px; }
+.cap-form-note {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.cap-form-row { display: flex; gap: 6px; }
+.cap-lbl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.cap-lbl .dim { font-size: 10px; text-transform: none; letter-spacing: 0; line-height: 1.45; }
+.cap-ta { resize: vertical; font-family: var(--font-mono); font-size: 10px; line-height: 1.5; }
+/* Preflight: seven checks, and the verdict above them rather than below, because
+   the verdict is the answer and the checks are the evidence. */
+.cap-pf-hint { margin: 0; font-size: 10px; line-height: 1.5; }
+.cap-pf-err { font-size: 10px; color: var(--state-error); line-height: 1.45; }
+.cap-pf-verdict {
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 600;
+}
+.cap-pf-verdict.is-ok {
+  color: var(--state-success);
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.24);
+}
+.cap-pf-verdict.is-bad {
+  color: var(--state-error);
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.26);
+}
+.cap-pf-list { display: flex; flex-direction: column; gap: 3px; }
+.cap-pf {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--state-success);
+}
+.cap-pf.is-bad { color: var(--state-error); }
+.cap-pf svg { flex: 0 0 auto; transform: translateY(1px); }
+.cap-pf-n { width: 76px; flex: 0 0 auto; color: var(--text-secondary); }
+.cap-pf-d {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cap-pf-eta { font-size: 10px; font-family: var(--font-mono); }
+
+.cap-src-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.cap-src-note { margin: 0; font-size: 10px; line-height: 1.5; }
+
+.cap-colls { display: flex; flex-direction: column; gap: 5px; }
+.cap-coll { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.cap-coll-n {
+  max-width: 150px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+.cap-coll .dim { font-size: 10px; }
+.cap-coll-bar {
+  width: 40px;
+  height: 3px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.cap-coll-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--state-success);
+}
+
+/* ── Main column ── */
+/* Like Engine and unlike Data: this is a page that scrolls whole, because the
+   backfill section at the bottom is part of the answer, not a footer. */
+.cap-main > * { flex: 0 0 auto; }
+
+.cap-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.cap-notice svg { flex: 0 0 auto; }
+.cap-notice.is-bad {
+  color: var(--state-error);
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.26);
+}
+.cap-notice.is-ok {
+  color: var(--state-success);
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.24);
+}
+
+.cap-idle { font-size: 11px; padding: 2px 0; }
+.cap-counts { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.cap-stat {
+  padding: 9px 11px;
+  text-decoration: none;
+  color: inherit;
+  transition: all var(--transition-fast);
+}
+.cap-stat .n { font-size: 18px; }
+.cap-stat:hover { border-color: var(--border-active); background: var(--surface-2); }
+.cap-stat.is-active { border-color: rgba(129, 140, 248, 0.45); background: var(--accent-glow); }
+/* The six states, twice: as a tinted number in the counts row and as a chip in
+   the tables. Same class, two shapes, so a colour can never mean one state in
+   one place and another state ten pixels below. */
+.cap-stat.cs-fetching .n { color: var(--state-info); }
+.cap-stat.cs-uploaded .n { color: var(--state-success); }
+.cap-stat.cs-failed .n { color: var(--state-warning); }
+.cap-stat.cs-unavailable .n { color: var(--state-error); }
+.cap-stat.cs-skipped .n { color: var(--text-tertiary); }
+
+.cchip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  cursor: help;
+}
+.cchip.cs-queued { color: var(--text-tertiary); background: var(--surface-2); border-color: var(--border-default); }
+.cchip.cs-fetching {
+  color: var(--state-info);
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.3);
+  animation: pulse-soft 1.8s ease-in-out infinite;
+}
+.cchip.cs-uploaded { color: var(--state-success); background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.25); }
+.cchip.cs-failed { color: var(--state-warning); background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.28); }
+.cchip.cs-unavailable { color: var(--state-error); background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.28); }
+.cchip.cs-skipped { color: var(--text-disabled); background: transparent; border-color: var(--border-subtle); }
+
+/* The reel in flight. A banner rather than a highlighted table row, for the same
+   reason Engine's is: it is the one row that is not history. */
+.cap-run {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 12px;
+  background: var(--surface-1);
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: var(--radius-sm);
+}
+.cap-run-head { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.cap-run-key { color: var(--text-pure); font-size: 11px; }
+.cap-run-head .dim { font-size: 10px; }
+.cap-up-meter { height: 3px; margin-top: 0; }
+.cap-phase {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ph-fetching { color: var(--state-info); background: rgba(96, 165, 250, 0.12); }
+.ph-uploading { color: var(--accent-primary); background: var(--accent-glow); }
+.ph-cutting { color: var(--ch-visual); background: rgba(134, 239, 172, 0.1); }
+.ph-assets { color: var(--state-success); background: rgba(74, 222, 128, 0.1); }
+
+.cap-attempt {
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.cap-run-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.cap-run-foot .dim { font-size: 10px; }
+.cap-fail-n { color: var(--state-warning); }
+
+/* Instagram pushing back. Amber and not red on purpose: the pacer has already
+   slowed itself down, so this is information, not a fault — it turns into a
+   decision only if the streak keeps climbing. */
+.cap-hostile {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  cursor: help;
+}
+/* The single background slot: a channel scan or an import, never both. */
+.cap-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+}
+.cap-task.is-bad { border-color: rgba(248, 113, 113, 0.28); }
+.cap-task.is-bad .dim { color: var(--state-error); }
+.cap-task-kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.cap-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cap-state-seg button { font-size: 10px; }
+
+/* A bounded, independently scrolling window. Six thousand rows would otherwise
+   push the backfill section — the other half of this screen — off the bottom. */
+.cap-rows { flex: 0 0 auto; max-height: 420px; }
+.cap-rows .dtable td { max-width: 300px; }
+.cq-state { width: 82px; }
+.cq-num { width: 54px; text-align: right; color: var(--text-tertiary); }
+.cq-up { max-width: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cq-detail { color: var(--state-warning); max-width: 260px; }
+.cq-tries { margin-right: 5px; font-family: var(--font-mono); color: var(--text-tertiary); }
+.cq-key {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-family: var(--font-mono);
+}
+.cq-key:hover { color: var(--text-pure); text-decoration: underline; }
+/* The rows with no message id leave for the browser rather than the player, so
+   they are a button and not an anchor — inside a webview an external href
+   navigates the application itself, and there is no back button. */
+.cq-key-ext {
+  padding: 0;
+  background: none;
+  border: 0;
+  font-size: inherit;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--border-active);
+}
+.cap-rows .dtable tr.is-current td { background: rgba(96, 165, 250, 0.08); }
+.cap-fail-hint { line-height: 1.5; }
+/* ── The ledger's own log ── */
+.cap-log {
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+.cap-ev {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cap-ev:last-child { border-bottom: 0; }
+.cap-ev-at { width: 62px; flex: 0 0 auto; font-family: var(--font-mono); font-size: 10px; }
+.cap-ev-k {
+  width: 92px;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.cap-ev-key { width: 96px; flex: 0 0 auto; font-size: 10px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cap-ev-t { flex: 1; min-width: 0; color: var(--text-secondary); }
+.ev-good .cap-ev-k { color: var(--state-success); }
+.ev-warn .cap-ev-k { color: var(--state-warning); }
+.ev-bad .cap-ev-k { color: var(--state-error); }
+.ev-bad .cap-ev-t { color: var(--text-primary); }
+
+/* ── Fast-playback assets ── */
+.cap-bf {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cap-bf-h { margin: 0; }
+.cap-bf-meter { height: 4px; margin-top: 0; }
+.cap-bf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; }
+.cap-bf-row .dim { font-size: 10px; }
+.cap-bf-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.cap-bf-auto { font-size: 10px; font-family: var(--font-mono); }
+.cap-bf-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 6px 9px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+}
+.cap-bf-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* The rail is the widest in the app, so it is also the first thing to go when the
+   window is narrow: a 324 px form beside a table needs about 900 px to be worth
+   having, and below that the counts and the queue are what matter. */
+@media (max-width: 900px) {
+  .cap-view .split { flex-direction: column; }
+  .cap-view .rail-left { width: 100%; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
+  .cap-view .cap-rail { max-height: 320px; }
+}
+
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }
 :focus-visible {

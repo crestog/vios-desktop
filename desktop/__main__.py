@@ -25,6 +25,7 @@ import socket
 import sys
 import threading
 import time
+import webbrowser
 
 # The repo root on sys.path, so `python -m desktop` works from anywhere and
 # VIOS.bat does not need to care what the working directory is.
@@ -166,6 +167,41 @@ class Bridge:
             log(f"could not open {target} — {type(e).__name__}: {e}", SUB, "WARN")
             return ""
         return target
+
+    def open_url(self, url: str) -> str:
+        """Open one reel's permalink in the real browser.
+
+        The Capture tab lists ledger rows by their Instagram URL, and "show me
+        the post that failed" is the first thing anyone wants when a fetch keeps
+        erroring. A plain `<a href>` cannot do it: inside a webview an external
+        link navigates *the application* to Instagram, and there is no back
+        button — the window is the app.
+
+        Two guards, for the same reason `open_path` refuses a non-path. The
+        scheme must be `https`, so a `file:` or `javascript:` string that reached
+        the bridge cannot be handed to the shell; and the host must be one this
+        app has business opening, so a compromised or mistyped ledger row cannot
+        turn a click here into a visit to anywhere at all. The allowlist is the
+        two hosts the ledger's own canonicaliser produces.
+        """
+        from urllib.parse import urlparse
+        raw = str(url or "").strip()
+        try:
+            parts = urlparse(raw)
+        except ValueError:
+            return ""
+        host = (parts.hostname or "").lower()
+        allowed = host in ("instagram.com", "www.instagram.com")
+        if parts.scheme != "https" or not allowed:
+            log(f"open_url: refusing {raw[:120]}", SUB, "WARN")
+            return ""
+        try:
+            webbrowser.open(raw, new=2)
+        except Exception as e:                          # noqa: BLE001
+            log(f"could not open {raw[:120]} — {type(e).__name__}: {e}",
+                SUB, "WARN")
+            return ""
+        return raw
 
 
 def main() -> int:

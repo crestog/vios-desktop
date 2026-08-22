@@ -711,3 +711,295 @@ export interface DerivedState {
   have: { proxy: boolean; sprite: boolean; posters: boolean; keyframes: boolean };
   complete: boolean;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Capture — the acquisition side, from `capture/routes.py`.
+
+   Two deviations from the conventions at the top of this file, both real and
+   both worth knowing before writing against them:
+
+     - a failure here is `{ok: false, error: "..."}`, not `note`. `capture/
+       routes.py:_err` predates the atlas envelope and is used by all 24 routes;
+     - `/api/capture/queue` returns `items`, not `results`. It is the one
+       endpoint in the app that does, because it is a window into a ledger
+       rather than a query result.
+
+   The third thing: **no route here ever returns a credential.** `settings`
+   carries `bot_token_set: true` and no token, by design — see the module
+   docstring. Nothing in this file should tempt a view into asking for one.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The six states a ledger row can be in — `capture/ledger.py:50-55`.
+ *
+ * `failed` and `unavailable` are the pair that must never be shown as one
+ * thing: `failed` comes back on its own (there is a retry ladder and up to
+ * three revivals behind it), `unavailable` means Instagram deleted the post and
+ * no amount of waiting helps. A UI that lumps them together makes a healthy run
+ * look broken.
+ */
+export type CaptureItemState =
+  | 'queued'
+  | 'fetching'
+  | 'uploaded'
+  | 'failed'
+  | 'unavailable'
+  | 'skipped';
+
+export const CAPTURE_STATES: CaptureItemState[] = [
+  'queued',
+  'fetching',
+  'uploaded',
+  'failed',
+  'unavailable',
+  'skipped',
+];
+
+/**
+ * `ledger.counts()` — one key per state *that exists*, plus two derived.
+ *
+ * A state with no rows is absent rather than zero, which is why every read of
+ * this goes through `?? 0` at the call site. `remaining` is queued + failed +
+ * fetching: what a run started now would still have to do.
+ */
+export interface CaptureCounts {
+  total?: number;
+  remaining?: number;
+  [state: string]: number | undefined;
+}
+
+/** `pacing.py:describe()` — the rate limiter, showing its work. */
+export interface CapturePacer {
+  /** `fast` or `safe`. */
+  profile: string;
+  /** Seconds between requests it is aiming for. */
+  target: number;
+  floor: number;
+  last_gap: number;
+  /** Multiplier on `target`. Above 1 means Instagram pushed back. */
+  backoff: number;
+  /** Requests left before the next scheduled break. */
+  until_break: number;
+  quiet_hours: boolean;
+  breaks: boolean;
+  requests_per_minute: number;
+}
+
+/**
+ * `creds.describe()` — presence and origin of each secret, never a value.
+ *
+ * `fields` is the whole point: one row per credential the app knows about, each
+ * saying whether it is set and *where it came from*. "The token is missing" and
+ * "the token came from the environment, not the file you just edited" are
+ * different problems and a boolean cannot tell them apart.
+ */
+export interface StoredCredentials {
+  fields?: Array<{
+    name: string;
+    label: string;
+    description: string;
+    aliases: string[];
+    present: boolean;
+    /** `env` | `kaggle` | `file` | `typed` | ''. */
+    source: string;
+  }>;
+  complete?: boolean;
+  local_file?: string;
+  local_file_present?: boolean;
+  on_kaggle?: boolean;
+  [k: string]: unknown;
+}
+
+/** `engine.settings()` — presence and pace, never a secret. */
+export interface CaptureSettings {
+  base: string;
+  ledger: string;
+  bot_token_set: boolean;
+  channel: number | string | null;
+  api_credentials_set: boolean;
+  /** Where each credential came from: env, stored file, or the form. */
+  credential_sources: Record<string, string>;
+  stored_credentials: StoredCredentials;
+  cookies_set: boolean;
+  speed: string;
+  target_seconds: number;
+  quiet_hours: boolean;
+  breaks: boolean;
+  skip_collections: string[];
+  max_attempts: number;
+  gallery_dl_fallback: boolean;
+  snapshot_every: number;
+}
+
+/**
+ * The item in flight. `{}` when nothing is.
+ *
+ * Every field is optional because the dict is built up as the item moves:
+ * `key`/`url`/`phase`/`attempt`/`started` at the start, `bytes` once the fetch
+ * lands, `sent`/`total` only while a multipart upload is running.
+ */
+export interface CaptureCurrent {
+  key?: string;
+  url?: string;
+  /** `fetching` → `uploading` → `assets`. */
+  phase?: string;
+  attempt?: number;
+  started?: number;
+  bytes?: number;
+  sent?: number;
+  total?: number;
+}
+
+/**
+ * The single background-task slot — a channel scan or an import.
+ *
+ * One at a time on purpose: both write the same ledger rows, and interleaving
+ * them would make the result depend on timing. A second request gets a 409.
+ */
+export interface CaptureTask {
+  kind: string;
+  running: boolean;
+  message: string;
+  error: string;
+  at: number;
+}
+
+/** `/api/capture/status` — `engine.status()` plus the task slot. */
+export interface CaptureStatus {
+  /** `idle` | `running` | `paused` | `stopping` | `error`. */
+  state: string;
+  message: string;
+  error: string;
+  counts: CaptureCounts;
+  session: {
+    captured: number;
+    failed: number;
+    /** Seconds since this run started. */
+    elapsed: number;
+    started_at: number;
+  };
+  current: CaptureCurrent;
+  /** Seconds left on a deliberate pause between requests. 0 when not waiting. */
+  waiting_seconds: number;
+  pacer: CapturePacer;
+  eta_hours: number;
+  /** Rows finished in the last hour, straight from the ledger. */
+  per_hour: number;
+  /** Consecutive rate-limit responses. Above zero means back off. */
+  hostile_streak: number;
+  settings: CaptureSettings;
+  task: CaptureTask;
+}
+
+/** One ledger row, as the queue window selects it. */
+export interface CaptureQueueRow {
+  key: string;
+  url: string;
+  state: string;
+  attempts: number | null;
+  last_error: string | null;
+  added_at: number | null;
+  done_at: number | null;
+  uploader: string | null;
+  views: number | null;
+  likes: number | null;
+  file_size: number | null;
+  duration: number | null;
+  /** The Telegram message this landed in — the proof it is captured. */
+  msg_id: number | null;
+}
+
+export interface CaptureQueueResponse {
+  ok: boolean;
+  /** `items`, not `results`. The one exception in the app. */
+  items: CaptureQueueRow[];
+  counts: CaptureCounts;
+  offset: number;
+  limit: number;
+}
+
+export interface CaptureCollection {
+  name: string;
+  /** Rows in this collection. */
+  n: number;
+  done: number;
+}
+
+export interface CaptureFailure {
+  key: string;
+  url: string;
+  /** `failed` or `unavailable` — the distinction the whole list exists for. */
+  state: string;
+  attempts: number | null;
+  last_error: string | null;
+  last_try_at: number | null;
+  next_try_at: number | null;
+}
+
+/** A row of the `event` table — the capture log. */
+export interface CaptureEvent {
+  id: number;
+  at: number;
+  kind: string;
+  key: string | null;
+  text: string | null;
+}
+
+export interface PreflightCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * `/api/capture/preflight` — everything that could stop a week-long run.
+ *
+ * `ready` is the engine's verdict ("this would run"); `ok` is the envelope's
+ * ("the request succeeded"). They are deliberately separate: a correctly
+ * reported "you have no cookies" must not look like a server error.
+ */
+export interface PreflightResponse {
+  ok: boolean;
+  ready: boolean;
+  checks: PreflightCheck[];
+  /** Names of the failed checks that are *blocking*. Empty means go. */
+  blocking: string[];
+  counts: CaptureCounts;
+  eta_hours: number;
+  error?: string;
+}
+
+/**
+ * `/api/capture/backfill` — the asset-set pass over videos captured before
+ * clip sets existed. Separate worker, separate thread, its own state machine.
+ */
+export interface BackfillStatus {
+  ok: boolean;
+  state: string;
+  message: string;
+  error: string;
+  started_at: number | null;
+  done: number;
+  failed: number;
+  skipped: number;
+  clips: number;
+  uploads: number;
+  /** How many rows this pass set out to do. */
+  total: number;
+  current: { key?: string; n?: number; of?: number; phase?: string };
+  notes: string[];
+  video_pause: number;
+  autostart: { state: string; message: string; at: number; armed: boolean };
+  /**
+   * Archive-wide, so the card reads on its own. Carries `error` instead of the
+   * counts when the ledger could not be opened — the worker's state is still
+   * worth showing, and collapsing the two would blank the whole card.
+   */
+  counts: {
+    videos?: number;
+    with_assets?: number;
+    without_assets?: number;
+    clips?: number;
+    error?: string;
+  };
+}
