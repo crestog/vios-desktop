@@ -769,7 +769,11 @@ def path(conn: sqlite3.Connection, a: str, b: str, max_depth: int = 6) -> dict:
     frontier small enough to answer instantly.
     """
     if a == b:
-        return {"ok": True, "path": nodes_by_id(conn, [a]), "edges": []}
+        # Through `_path_result` rather than hand-built, so the degenerate
+        # answer has the same shape as every other one: `path` is always ids
+        # and `nodes` is always the hydration. A caller that has to branch on
+        # whether `path` holds strings or rows will get it wrong once.
+        return _path_result(conn, [a])
     if not _node_row(conn, a) or not _node_row(conn, b):
         return {"ok": False, "note": "unknown node"}
 

@@ -89,6 +89,13 @@ def _safe(video_key: str) -> str:
     return _UNSAFE.sub("_", str(video_key))[:120] or "unknown"
 
 
+# The same function, under a name other modules are allowed to import. `derive.py`
+# and `library.py` name every artefact they write after the video key, and a
+# second copy of this sanitiser is precisely how the writer and the reader end up
+# disagreeing about one filename in ten thousand. One owner, one function.
+safe_name = _safe
+
+
 # The suffix that separates a proxy's cache identity from its video's. A dot,
 # because `_safe` permits one and `os.path.splitext` therefore reads
 # `1234.proxy.mp4`'s stem as `1234.proxy` — which is exactly the string
@@ -104,6 +111,31 @@ def proxy_key(video_key: str) -> str:
 
 def _cache_path(video_key: str) -> str:
     return os.path.join(config.VIDEO_CACHE, f"{video_key}.mp4")
+
+
+def local_proxy_path(video_key: str) -> str:
+    """Where `derive.py` writes this video's playback proxy, present or not.
+
+    Two functions rather than one because the two callers want opposite things:
+    the writer needs the destination before the file exists, and `resolve()`
+    needs to know whether it does. Both live here rather than in `derive.py` so
+    that the module which *resolves* playback and the module which *produces* it
+    cannot disagree about a filename — `derive.proxy_path` is this function.
+    """
+    return os.path.join(config.PROXY_DIR, f"{_safe(video_key)}.mp4")
+
+
+def local_proxy(video_key: str) -> str:
+    """The derived proxy if it is really on disk, else "".
+
+    Zero-byte counts as absent, the same bargain `resident()` makes: a transcode
+    killed between create and first write must not be served as a video.
+    """
+    path = local_proxy_path(video_key)
+    try:
+        return path if os.path.getsize(path) > 0 else ""
+    except OSError:
+        return ""
 
 
 def _set(key: str, **kw) -> None:
@@ -125,9 +157,13 @@ def resident(local_path: str, video_key: str) -> bool:
     A cached 480p proxy counts, because `resolve()` will play it. Checked last:
     it is the least likely of the three to be present and the only one that
     needs a string built for it.
+
+    So does a locally derived proxy, checked *first* — it is both the most likely
+    thing to be present once the mirror has run and the file `resolve()` now
+    prefers, so asking about it first makes the common case one `stat`.
     """
-    for p in (local_path, _cache_path(str(video_key)),
-              _cache_path(proxy_key(video_key))):
+    for p in (local_proxy_path(video_key), local_path,
+              _cache_path(str(video_key)), _cache_path(proxy_key(video_key))):
         if not p:
             continue
         try:
@@ -156,6 +192,25 @@ def resident_keys(conn: sqlite3.Connection, force: bool = False) -> frozenset:
         return _RESIDENT["keys"]
 
     keys = set()
+    # The derived proxies first, and by a different rule than the cache below:
+    # these are named `<safe_key>.mp4` for *any* key, not just a numeric one,
+    # because a local-library video is keyed by content hash and is every bit as
+    # playable as a channel video. Restricting this scan to digits — which the
+    # cache scan must do, for the reason stated there — would make the entire
+    # local library wear a "fetching" badge forever.
+    try:
+        for name in os.listdir(config.PROXY_DIR):
+            stem, ext = os.path.splitext(name)
+            if ext != ".mp4" or not stem:
+                continue
+            try:
+                if os.path.getsize(os.path.join(config.PROXY_DIR, name)) > 0:
+                    keys.add(stem)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
     try:
         for name in os.listdir(config.VIDEO_CACHE):
             stem, ext = os.path.splitext(name)
@@ -334,13 +389,33 @@ def resolve(conn: sqlite3.Connection, video_key: str) -> dict:
     Callers that only want to know "can this play, and from where" can keep
     ignoring the field; callers that touch the cache must pass `cache_key` on.
 
-    Order of preference, cheapest first: an original already on disk beats
-    everything, because it costs no network at all and is better quality. After
-    that the proxy wins — a cached proxy over a channel fetch, and a channel
-    fetch of two megabytes over a channel fetch of forty.
+    Order of preference, and it changed when this became a laptop application.
+    Upstream the original on disk beat everything, because the only alternative
+    was a 480p proxy that had to be *downloaded* — so "already here" and "better
+    quality" pointed the same way and there was nothing to trade off.
+
+    Here `derive.py` renders a proxy locally from the original, so the choice is
+    between two files that are both already on disk, and the proxy wins:
+    `+faststart` puts the moov atom at the front where Instagram's own mp4s put
+    it at the end, and a ~1 s GOP makes a seek land on a nearby keyframe. Those
+    two facts are the difference between a click that paints in 150 ms and one
+    that reads forty megabytes first. The original is still preferred over
+    anything that needs the network, and it is still what the engine analyses —
+    but the engine reads `KEYFRAME_DIR`, which was cut from the original at source
+    resolution, so nothing that wants real pixels comes through here.
+
+    Cheapest first, therefore: a locally derived proxy, then the original on
+    disk, then a proxy Kaggle rendered and uploaded, then a channel fetch.
     """
     key = str(video_key)
     info = _row(conn, key)
+
+    derived = local_proxy(key)
+    if derived:
+        return {"key": key, "cache_key": key, "via": "local-proxy",
+                "where": "local", "path": derived,
+                "size": os.path.getsize(derived),
+                "duration": info.get("duration"), "msg_id": info.get("msg_id")}
 
     local = info.get("local_path")
     if local and os.path.exists(local) and os.path.getsize(local) > 0:

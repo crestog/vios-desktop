@@ -224,8 +224,12 @@ def create_app() -> FastAPI:
         log(f"capture routes unavailable — {type(e).__name__}: {e}",
             SUB, "WARN")
 
-    # engine/ and admin/ routers land here as they are written. Nothing is
-    # stubbed: a route that does not exist yet returns 404, which is the truth.
+    try:
+        from server.desktop_routes import router as desktop_router
+        total += _adopt(app, desktop_router, "desktop", _api_only)
+    except Exception as e:                                     # noqa: BLE001
+        log(f"desktop routes unavailable — {type(e).__name__}: {e}",
+            SUB, "WARN")
 
     _mount_web(app)
     log(f"{total} API route(s) on one app", SUB)

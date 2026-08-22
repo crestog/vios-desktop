@@ -77,7 +77,7 @@ WEB_DIR = paths.WEB_DIR           # web/dist — the built frontend
 # Every reader in this package uses `config.NAME`, which is what makes a
 # credential typed into the Admin form live on the next read with no restart.
 _FORWARD = ("API_ID", "API_HASH", "BOT_TOKEN", "CHANNEL_ID", "HF_TOKEN",
-            "IG_COOKIES")
+            "IG_COOKIES", "SQLITE_TIMEOUT")
 
 
 def __getattr__(name: str):

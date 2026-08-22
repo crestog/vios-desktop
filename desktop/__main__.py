@@ -147,6 +147,26 @@ class Bridge:
                 SUB, "WARN")
         return paths.HOME
 
+    def open_path(self, path: str) -> str:
+        """Reveal one watched folder or one local video in Explorer.
+
+        The Library view lists local videos by their real path, and "show me
+        this file" is the obvious next thing to want. Only an existing path is
+        opened — `startfile` on a string that is not a path will happily hand
+        it to the shell's URL handler, and a value that arrived over the bridge
+        is not something to pass to a shell resolver unchecked.
+        """
+        target = os.path.abspath(str(path or ""))
+        if not os.path.exists(target):
+            log(f"open_path: nothing at {target}", SUB, "WARN")
+            return ""
+        try:
+            os.startfile(target)                        # noqa: S606
+        except Exception as e:                          # noqa: BLE001
+            log(f"could not open {target} — {type(e).__name__}: {e}", SUB, "WARN")
+            return ""
+        return target
+
 
 def main() -> int:
     import webview
