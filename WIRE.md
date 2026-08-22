@@ -44,7 +44,9 @@ including the upstream SHA it was verified against.**
 | Here | What it is |
 |---|---|
 | `paths.py` | The one place that decides where anything lives. Honours `VIOS_LOCAL_HOME`. |
-| `server/app.py` | **One** FastAPI app. Adopts `atlas.server`'s and `capture.routes`'s finished `/api/*` route objects onto a single router (51 + 23 = 74), leaving both old frontends behind, and serves `web/dist` with an SPA fallback so `/watch/<key>?t=` is a real cold-loadable link. Replaces upstream `ui_server.py:940`'s `app.mount("/atlas", _atlas_server.app)`, which was a whole second FastAPI instance. |
+| `server/app.py` | **One** FastAPI app. Adopts `atlas.server`'s, `capture.routes`'s, `server.desktop_routes`'s and `server.admin_routes`'s finished `/api/*` route objects onto a single router (51 + 23 + 25 + 7 = 106), leaving both old frontends behind, and serves `web/dist` with an SPA fallback so `/watch/<key>?t=` is a real cold-loadable link. Replaces upstream `ui_server.py:940`'s `app.mount("/atlas", _atlas_server.app)`, which was a whole second FastAPI instance. |
+| `server/desktop_routes.py` | The 25 routes with no upstream counterpart: mirror worker, local library, engine queue, derived artefacts (poster tiers, sprite sheet, keyframes), disk and host. |
+| `server/admin_routes.py` | Credentials (`creds.save_local` / `forget_local` had no route anywhere — see defect 1 below), the schema-drift banner, and `db_restore` inspect/apply. **No export route, deliberately:** `db_export` pins its manifest to the channel, and on this machine `config.DB_PATH` is `<HOME>/lake/lake.db`, which nothing here reads — so an export from the laptop would publish an empty index over the pinned manifest the Kaggle side restores from. |
 | `server/__main__.py` | `python -m server` — the API with no window, for `npm run dev` to proxy. |
 | `desktop/__main__.py` | The window: credentials → uvicorn on a free port → `webview.create_window`. |
 | `VIOS.bat`, `backup.bat` | Launch, and `git bundle` (there is no remote). |
@@ -109,7 +111,13 @@ and they are the reason separating them was cheap rather than reckless:
    than `sizing.SCHEMA_VERSION` must be reported, not skipped. The upstream store
    already refuses a newer database with *"Update the code — do not let an older
    binary write to a newer database"* (`vios/process/store.py:458`); this side
-   raises the same alarm as a banner in the UI.
+   raises the same alarm as a banner in the UI. **`GET /api/admin/wire`** is what
+   feeds it: it compares `sizing.SCHEMA_VERSION` against the highest `schema`
+   any imported bundle or shard was written with and returns
+   `verdict: "ahead"` when the channel is newer than this reader. It also reports
+   `wire_stale`, which catches the quieter failure — this file's recorded schema
+   number no longer matching the constant in the tree, meaning the contract
+   document was not updated with the code.
 
 **Writer here:** `shardwriter.py`. **Reader here:** `atlas/ingest.py:import_shard`.
 **Writer upstream:** `vios/process/store.py:export_shard` (`:1095`), header at

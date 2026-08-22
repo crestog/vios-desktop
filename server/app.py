@@ -231,6 +231,17 @@ def create_app() -> FastAPI:
         log(f"desktop routes unavailable — {type(e).__name__}: {e}",
             SUB, "WARN")
 
+    try:
+        from server.admin_routes import router as admin_router
+        total += _adopt(app, admin_router, "admin", _api_only)
+    except Exception as e:                                     # noqa: BLE001
+        # Admin owns the credential form, which is where a user goes when
+        # something else is already broken. Losing it silently would be the
+        # worst possible tab to lose, so this logs at WARN like the others and
+        # the frontend's own 404 handling says the rest.
+        log(f"admin routes unavailable — {type(e).__name__}: {e}",
+            SUB, "WARN")
+
     _mount_web(app)
     log(f"{total} API route(s) on one app", SUB)
     return app
