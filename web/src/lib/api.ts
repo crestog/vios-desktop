@@ -22,7 +22,6 @@
  */
 
 import type {
-  ArchiveStatus,
   BackfillStatus,
   BundlesResponse,
   CaptureCollection,
@@ -38,6 +37,7 @@ import type {
   CredentialFields,
   CredentialForgetResult,
   CredentialSaveResult,
+  DeconstructResponse,
   DerivedState,
   DiskUsage,
   EngineJob,
@@ -54,6 +54,7 @@ import type {
   LibraryResponse,
   LocalVideo,
   MirrorStatus,
+  PatternsResponse,
   PreflightResponse,
   RestoreStarted,
   RestoreStatus,
@@ -62,8 +63,10 @@ import type {
   RoadmapResponse,
   RoadmapStepDetail,
   SchemaResponse,
+  ScriptResponse,
   SearchResponse,
   SpriteMeta,
+  StatusEnvelope,
   StoredCredentials,
   TableResponse,
   VideoDetail,
@@ -160,8 +163,11 @@ function qs(params: object): string {
 }
 
 // ── Archive state ─────────────────────────────────────────────────────────
+// The whole envelope, not `envelope.search`: the counts are one level down, and
+// a helper that quietly returned the inner block would make `/api/status`'s
+// other five blocks unreachable through the only function that fetches it.
 export const getStatus = (signal?: AbortSignal) =>
-  request<ArchiveStatus>('/status', {}, signal);
+  request<StatusEnvelope>('/status', {}, signal);
 
 export const getFacets = (signal?: AbortSignal) =>
   request<FacetsResponse>('/facets', {}, signal);
@@ -535,6 +541,41 @@ export const getDisk = (signal?: AbortSignal) =>
 
 export const getHost = (refresh = false, signal?: AbortSignal) =>
   request<HostFacts>(`/desktop/host${qs({ refresh })}`, {}, signal);
+
+// ── Studio ────────────────────────────────────────────────────────────────
+// Three reads over the same tables Search reads, all derived on request and
+// cached server-side against a fingerprint of those tables. There is nothing to
+// start, nothing to poll and nothing to write, which is why every one of these
+// takes a signal and none of them is a POST.
+
+/**
+ * One reel taken apart: pacing, channels, sections, hook, gaps, claims.
+ *
+ * 404s for a key that is not indexed — `/studio?key=…` is a real address that
+ * can be typed or bookmarked, so "not in the index" has to be distinguishable
+ * from "indexed but empty", which is a 200 with `notes` explaining why.
+ */
+export const getDeconstruct = (key: string, signal?: AbortSignal) =>
+  request<DeconstructResponse>(`/studio/deconstruct/${encodeURIComponent(key)}`, {}, signal);
+
+/**
+ * Distributions across a scope.
+ *
+ * A scope is a goal (one hybrid search), a creator, a category, or nothing at
+ * all — and a goal matching fewer than three reels silently falls back to the
+ * whole archive, which the response says in `scope.note` rather than in a
+ * status code. Empty archive is a 200 with `reels: 0`.
+ */
+export const getPatterns = (
+  args: { goal?: string; creator?: string; category?: string } = {},
+  signal?: AbortSignal
+) => request<PatternsResponse>(`/studio/patterns${qs(args)}`, {}, signal);
+
+/** The same scope as a beat sheet: medians, ranked phrases, cited examples. */
+export const getScriptDraft = (
+  args: { goal?: string; creator?: string; category?: string } = {},
+  signal?: AbortSignal
+) => request<ScriptResponse>(`/studio/script${qs(args)}`, {}, signal);
 
 // ── Admin ─────────────────────────────────────────────────────────────────
 // JSON, unlike capture's writes: `server/admin_routes.py` declares a pydantic

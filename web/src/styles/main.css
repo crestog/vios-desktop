@@ -336,6 +336,50 @@ input, button, select, textarea {
   padding: 8px;
 }
 
+/* ── Rail blocks: several titled groups down one rail ──
+   `.rail-head` is the rail's *own* fixed header — one per rail, outside the
+   scroll. These are different: a rail that answers three questions (Roadmap's
+   progress / ready / goals, Studio's scope / reels / method) needs three titled
+   groups that scroll together, so they live inside `.rail-body` and carry their
+   own heading. The separator is a top border on every block but the first,
+   which means blocks can be added, reordered or hidden without any of them
+   knowing whether it is the last one. */
+.rail-block { padding: 10px 4px 14px; }
+.rail-block + .rail-block { border-top: 1px solid var(--border-subtle); }
+
+.rail-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+/* The count sits at the far end of the heading rather than beside the word, so
+   a column of blocks has its numbers in one vertical line and can be scanned
+   without reading any of the labels. */
+.rail-n {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Prose in a 232 px column: 11.5px and 1.55 line-height is the smallest that
+   still reads as sentences rather than as a caption. */
+.rail-note {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.rail-note + .rail-note { margin-top: 7px; }
+.rail-note strong { color: var(--text-secondary); font-weight: 600; }
+
 .split-main {
   flex: 1;
   min-width: 0;
@@ -386,14 +430,60 @@ input, button, select, textarea {
 }
 .view-hint a { color: var(--accent-primary); }
 
+/* ── The search box, in its two shapes ──
+   Six views have a text box in the view bar and they split into two markup
+   shapes, so the CSS has to serve both rather than picking a winner:
+
+     - **Bare** (Search, Library): `<input class="input-text search-box">`. The
+       box *is* the bar's main affordance, so `.search-box` is a modifier on the
+       input itself — it grows to fill the bar.
+     - **Wrapped** (Graph, Roadmap, Studio, Data): the same input inside
+       `.search-box-wrap`, with a leading icon and a trailing clear button laid
+       over it. The wrapper only adds the two overlays; the input keeps the same
+       class and therefore the same size and behaviour.
+
+   The icon's gutter comes from `.sbw-icon + .input-text` rather than from the
+   wrapper, so a wrapper *without* an icon (Data filters rows, and a magnifier
+   there would claim it searches the archive) does not reserve 26 px of empty
+   space it never fills. */
 .search-box {
+  flex: 1 1 260px;
+  min-width: 160px;
+  max-width: 520px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.search-box-wrap {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  position: relative;
+  flex: 1 1 260px;
+  min-width: 160px;
+  max-width: 520px;
 }
-.search-box .input-text { padding: 5px 10px; font-size: 12px; width: 200px; }
-.search-box .btn-icon { padding: 4px; color: var(--text-tertiary); }
+.search-box-wrap .search-box {
+  /* Inside a wrapper the input already has its width from the flex parent, and
+     the right gutter is reserved permanently: a clear button that appears only
+     when there is text must not reflow the text under the cursor. */
+  flex: 1 1 auto;
+  max-width: none;
+  padding-right: 26px;
+}
+.sbw-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.sbw-icon + .input-text { padding-left: 26px; }
+.sbw-clear {
+  position: absolute;
+  right: 3px;
+  padding: 3px;
+  color: var(--text-tertiary);
+}
+.sbw-clear:hover { color: var(--text-primary); background: var(--surface-2); }
 
 /* A meter, not a progress bar: it reports a measured proportion (VRAM in use,
    disk by category) rather than work completed. `.meter-seg` holds several
@@ -2000,6 +2090,631 @@ input, button, select, textarea {
   .adm-view .adm-tab { flex-shrink: 0; }
   .adm-view .adm-tab .tbl-r { display: none; }
   .adm-rail-foot { display: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STUDIO — the archive read as craft
+   ══════════════════════════════════════════════════════════════════════
+   Three modes over one scope: distributions across many reels, one reel taken
+   apart, and the same scope as a beat sheet. Two rules run through every rule
+   below and explain most of the choices:
+
+     - **A number and its denominator travel together.** `62%` and `of 34
+       reels` are one fact, so they are one flex row with the second at 10px in
+       `--text-tertiary` — never a footnote and never a tooltip.
+     - **Nothing is a bar chart of one value.** Every distribution is drawn as a
+       p10–p90 band with the median marked, because the useful reading is a
+       range to aim at, not a single average to hit. `.stu-dbar` is that shape
+       and it is reused by six different sections.
+
+   Colour still means exactly one thing: a hue is a channel. Indigo is the
+   accent and appears for magnitude (band fills, archetype density); it is never
+   used for a channel and no channel hue is ever used for magnitude. */
+
+.stu-main { gap: 20px; }
+.stu-main .section-h h2 { display: inline-flex; align-items: center; gap: 6px; }
+.stu-main section { display: flex; flex-direction: column; gap: 10px; }
+/* A second heading inside a section, for a sub-answer that has its own
+   denominator (the hook's phrases under the hook's rates). */
+.stu-sub-h { margin: 6px 0 2px; }
+
+.stu-skels { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.stu-skel { height: 68px; }
+.stu-skel-row { height: 24px; }
+
+.stu-notes { display: flex; flex-direction: column; gap: 8px; }
+.stu-bad { color: var(--state-error); }
+
+/* ── The distribution bar, reused everywhere a `Stats` is shown ──
+   The track is the scope's own min…max, the band is p10…p90, the tick is the
+   median. `overflow: visible` on the track is deliberate: the tick stands 2px
+   proud at both edges so it stays readable when the band is only 2% wide. */
+.stu-dbar {
+  position: relative;
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: var(--radius-full);
+  overflow: visible;
+}
+.stu-dbar-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(129, 140, 248, 0.45);
+  border-radius: var(--radius-full);
+}
+.stu-dbar-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-pure);
+  border-radius: 1px;
+}
+/* ── Patterns: the seven measures ── */
+.stu-dists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+  gap: 10px;
+}
+.stu-drow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.stu-drow-h { display: flex; align-items: baseline; gap: 8px; }
+.stu-drow-l {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  cursor: help;
+}
+.stu-drow-v {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-pure);
+}
+.stu-drow-n, .stu-drow-f {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.stu-drow-f { line-height: 1.5; }
+
+/* ── A rate with its count, used by the hook and by every beat ── */
+.stu-rate { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.stu-rate .chip-channel { flex-shrink: 0; min-width: 74px; }
+.stu-rate-track {
+  flex: 1 1 auto;
+  height: 6px;
+  min-width: 40px;
+  background: var(--surface-3);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.stu-rate-fill { display: block; height: 100%; border-radius: var(--radius-full); }
+.stu-rate-v {
+  flex-shrink: 0;
+  width: 38px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.stu-rate-n {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+/* ── Ranked phrases: the bar is |z| against the strongest term in the list ──
+   The fill sits *behind* the word rather than beside it, so 18 terms read as a
+   list of words first and a chart second. The whole test — counts and rates on
+   both sides, log-odds, z — is in the row's `title`, which is why the row shows
+   a help cursor. */
+.stu-phrases { display: flex; flex-direction: column; gap: 3px; }
+.stu-phrase {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  cursor: help;
+}
+.stu-phrase-z {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(129, 140, 248, 0.18);
+}
+.stu-phrase-t { position: relative; font-size: 12px; color: var(--text-primary); }
+.stu-phrase-n {
+  position: relative;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.stu-basis {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ── Rail: scope filters, the reel finder, denominators in a 232px column ── */
+.stu-filters { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.stu-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.stu-filter:hover { color: var(--state-error); border-color: rgba(248, 113, 113, 0.45); }
+
+.stu-kv { margin: 8px 0 0; }
+.stu-kv dd em {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 10px;
+}
+.rail .stu-kv { grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 11px; }
+.stu-rail-find { width: 100%; margin-bottom: 6px; padding: 4px 8px; font-size: 11px; }
+/* ── Channel table ──
+   `display: contents` on the rows so all four columns align across every row
+   without nesting a grid per row. The trade is that a row cannot have its own
+   background on hover; the alignment is worth more here, because the two rate
+   columns have *different denominators* and reading them as columns is the only
+   way that difference is visible. */
+.stu-ct {
+  display: grid;
+  grid-template-columns: minmax(92px, max-content) auto auto minmax(72px, 1fr);
+  gap: 7px 14px;
+  align-items: center;
+}
+.stu-ct-h, .stu-ct-r { display: contents; }
+.stu-ct-h > span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.stu-ct-v {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.stu-ct-v em {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ── Two- and three-up panel rows ── */
+.stu-hook {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(236px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.stu-two {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(304px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.stu-hook .panel-h, .stu-two .panel-h { margin-bottom: 8px; }
+.stu-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+/* One channel as a 7px square — the compact form of a chip, for a table cell or
+   a section's mix where a full chip would not fit. */
+.stu-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+/* ── Archetypes: cut rate × talking ──
+   Density is carried by an indigo wash whose alpha is the cell's share of the
+   fullest cell, so the shape of the scope is legible before any number is read.
+   Empty cells are dimmed rather than hidden: "no reel in this archive is fast
+   and quiet" is a finding. */
+.stu-arch { display: grid; gap: 6px; }
+.stu-arch-h, .stu-arch-rh {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+.stu-arch-h { text-align: center; }
+.stu-arch-rh { align-self: center; text-align: right; padding-right: 6px; }
+.stu-arch-c {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 76px;
+  padding: 8px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.stu-arch-c.is-empty { opacity: 0.4; }
+.stu-arch-n {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-pure);
+}
+.stu-arch-ex {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-arch-ex:hover { color: var(--accent-primary); }
+.stu-edges { font-family: var(--font-mono); font-size: 10px; line-height: 1.55; }
+
+/* ── Reel-by-reel table ──
+   Header and rows are separate grids sharing `--rt-cols`, which is why every
+   track is an `fr` and none is `auto`: `auto` would resolve per row against
+   that row's own content and the columns would stop lining up. The rows stay
+   real elements (rather than `display: contents`) because each one is a link and
+   has to show hover and focus. */
+.stu-rt {
+  --rt-cols: minmax(120px, 2.4fr) repeat(7, minmax(46px, 0.75fr)) minmax(52px, 0.6fr);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-x: auto;
+}
+.stu-rt-h, .stu-rt-r {
+  display: grid;
+  grid-template-columns: var(--rt-cols);
+  gap: 0 10px;
+  align-items: center;
+  min-width: 640px;
+}
+.stu-rt-h {
+  padding: 0 8px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.stu-rt-h > span, .stu-rt-h > button {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  text-align: right;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stu-rt-h > span:first-child { text-align: left; cursor: default; }
+.stu-rt-h > button:hover { color: var(--text-secondary); }
+.stu-rt-h > button.on { color: var(--text-primary); }
+.stu-rt-r {
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  text-decoration: none;
+}
+.stu-rt-r:hover { background: var(--surface-2); border-color: var(--border-default); }
+.stu-rt-t {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-rt-v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+.stu-rt-ch { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap; }
+/* ── One reel: header, cutting, and the channel×time heatmap ── */
+.stu-head { display: flex; align-items: flex-start; gap: 14px; }
+.stu-head-l { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.stu-caption { font-size: 12px; line-height: 1.6; color: var(--text-secondary); max-width: 74ch; }
+.stu-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  max-width: 560px;
+  margin-top: 4px;
+}
+
+.stu-pace {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.stu-pace .stu-kv { margin: 0; }
+.stu-pace-r { display: flex; flex-direction: column; gap: 6px; }
+.stu-pace-x {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.stu-jump { align-self: flex-start; margin-top: 2px; }
+
+/* The heatmap: a row per channel, a column per time bin, opacity as occupancy.
+   Cells are buttons because they navigate — the click opens the player at that
+   bin — and `flex: 1 1 0` with `min-width: 0` lets 96 of them share whatever
+   width the pane has instead of forcing a horizontal scrollbar. */
+.stu-hm {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) 1fr;
+  gap: 3px 8px;
+  align-items: center;
+}
+.stu-hm-l { display: flex; justify-content: flex-end; }
+.stu-hm-row { display: flex; gap: 1px; height: 16px; }
+.stu-hm-c {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.stu-hm-c:hover { outline: 1px solid var(--text-pure); }
+.stu-hm-axis { position: relative; height: 13px; }
+.stu-hm-axis span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+.stu-hm-axis span:first-child { transform: none; }
+.stu-hm-axis span:last-child { transform: translateX(-100%); }
+/* ── Sections: the strip is the whole reel at a glance, the list is the detail ── */
+/* Each segment's width is its share of the runtime (`flexGrow` inline), so the
+   strip is a true proportional map and needs no width arithmetic here. */
+.stu-strip {
+  display: flex;
+  gap: 2px;
+  height: 26px;
+  margin-bottom: 10px;
+}
+.stu-strip-s {
+  flex: 0 1 0;
+  min-width: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bg-base);
+  cursor: pointer;
+}
+.stu-strip-s:hover { outline: 1px solid var(--text-pure); outline-offset: 1px; }
+
+.stu-sec { display: flex; align-items: center; gap: 10px; }
+.stu-sec-n {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bg-base);
+}
+.stu-sec-t { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; }
+.stu-sec-l {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.stu-sec-mix { display: flex; gap: 9px; flex: 0 0 auto; }
+.stu-mix {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+.stu-sec-len {
+  flex: 0 0 44px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+/* ── Quoted moments, unobserved stretches, named entities ── */
+.stu-quotes { display: flex; flex-direction: column; gap: 6px; }
+.stu-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.stu-quote:hover { border-color: var(--border-active); background: var(--surface-2); }
+.stu-quote-h { display: flex; align-items: center; gap: 7px; }
+.stu-quote-t { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.stu-quote-x { font-size: 12px; line-height: 1.55; color: var(--text-primary); }
+.stu-quote-src { font-size: 10.5px; color: var(--text-tertiary); }
+
+.stu-gaps,
+.stu-claims { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px; }
+.stu-gap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  background: var(--bg-deep);
+  border: 1px dashed var(--border-active);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.stu-gap:hover { color: var(--text-pure); border-style: solid; }
+.stu-gap em { font-style: normal; color: var(--text-tertiary); }
+
+.stu-claim {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.stu-claim:hover { border-color: var(--border-active); background: var(--surface-2); }
+.stu-claim-n { font-size: 11.5px; color: var(--text-primary); }
+.stu-claim-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); }
+.stu-claim-c { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+/* ── Script mode: one card per beat ── */
+/* Beat cards carry phrase tables and quotes, so they need real width; two
+   columns on a wide window, one below ~800px of pane. */
+.stu-beats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+}
+.stu-beat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.stu-beat-h { display: flex; align-items: baseline; gap: 8px; }
+.stu-beat-n {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-pure);
+}
+.stu-beat-t { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); }
+.stu-beat-p { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.stu-beat-lead { font-size: 12px; line-height: 1.55; color: var(--text-secondary); }
+.stu-beat-lead em { font-style: normal; }
+.stu-beat-leads {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 2px;
+}
+.stu-beat-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+.stu-beat .stu-kv { margin: 0; }
+/* ── The sheet, as rows and as the text the copy button hands over ── */
+.stu-outline {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.stu-ol { padding: 10px 12px; background: var(--surface-1); }
+.stu-ol-h { display: flex; align-items: baseline; gap: 10px; }
+.stu-ol-n {
+  flex: 0 0 96px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+.stu-ol-x { font-size: 12.5px; color: var(--text-primary); }
+.stu-ol-p {
+  margin: 5px 0 0 106px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stu-ol-p li {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.stu-ol-p li::before { content: '·'; margin-right: 6px; color: var(--text-tertiary); }
+
+.stu-raw { margin-top: 10px; }
+.stu-raw summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.stu-raw summary:hover { color: var(--text-secondary); }
+.stu-raw pre {
+  margin: 8px 0 0;
+  padding: 12px;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
 }
 
 /* ── Accessibility floor ── */

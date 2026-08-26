@@ -18,6 +18,7 @@ import engine_queue
 import library
 import mirror
 import paths
+import studio
 from logger import vios_log as log
 from sizing import registry
 
@@ -345,3 +346,54 @@ def get_host_facts(refresh: bool = False):
         return {"ok": False, "note": "host probe failed",
                 "gpus": [], "gpu_count": 0, "usable_vram_mb": 0}
     return {"ok": True, **res}
+
+
+# ── Studio ────────────────────────────────────────────────────────────────
+# The archive read as craft. Every one of these is a pure read of `video_index`,
+# `moments`, `shot` and `claim` — `studio` writes nothing and stores nothing, so
+# there is no start/stop/state here and no POST at all.
+#
+# `atlas.server` is imported inside the call rather than at module scope, the
+# same way `admin_routes` does it. It is a heavy module and `server/app.py`
+# imports this one while building its route table; a top-level import would make
+# the two files' load order matter for no benefit.
+
+def _db():
+    """This thread's connection to the reader database.
+
+    `atlas.server.db()` is thread-local and already applies the pragmas and
+    `ensure_meta`, so going through it means Studio shares exactly the
+    connection Search and Graph read through — including its WAL snapshot, so a
+    deconstruction cannot disagree with the search result that opened it."""
+    from atlas import server as atlas_server
+    return atlas_server.db()
+
+
+@router.get("/api/studio/deconstruct/{video_key}")
+def studio_deconstruct(video_key: str):
+    """Take one reel apart: pacing, channels, sections, hook, gaps, claims.
+
+    404 for a key that is not indexed, because the caller is a route
+    (`/studio?key=…`) that can be typed or bookmarked, and "this reel is not in
+    the index" is a different thing for it to render than an empty analysis."""
+    got = studio.deconstruct(_db(), video_key)
+    if not got.get("ok"):
+        raise HTTPException(status_code=404, detail=got.get("error", "not indexed"))
+    return got
+
+
+@router.get("/api/studio/patterns")
+def studio_patterns(goal: str = "", creator: str = "", category: str = ""):
+    """What a scope of reels has in common, as distributions.
+
+    An empty scope is a 200 with `reels: 0` and a note, not an error: "nothing
+    is indexed yet" is the normal first state of this screen and the UI has to
+    be able to say it in words."""
+    return studio.patterns(_db(), goal=goal, creator=creator, category=category)
+
+
+@router.get("/api/studio/script")
+def studio_script(goal: str = "", creator: str = "", category: str = ""):
+    """A beat sheet measured from a scope, with citations and no generated prose."""
+    return studio.script_draft(_db(), goal=goal, creator=creator, category=category)
+

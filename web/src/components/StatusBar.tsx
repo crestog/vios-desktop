@@ -28,7 +28,9 @@ export default function StatusBar() {
 
   // The archive counts do not move unless a shard lands, so this is fetched
   // once rather than polled. Home is where live counts belong.
-  const { data: archive } = useFetch(getStatus, []);
+  // `.search` because `/api/status` is an envelope — see `StatusEnvelope`.
+  const { data: status } = useFetch(getStatus, []);
+  const archive = status?.search;
 
   const gpu = host?.gpus?.[0];
   const freeGb = disk ? disk.free_bytes / GB : null;

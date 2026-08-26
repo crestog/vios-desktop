@@ -249,7 +249,8 @@ export default function DrillDown({ target }: { target: DrillTarget }) {
                   {c.same_value !== null && c.same_value !== undefined && (
                     <p className="cell-note">
                       {fmtCount(c.same_value)} {c.same_value === 1 ? 'row' : 'rows'} in{' '}
-                      <code>{c.table}</code> carry this same value.
+                      <code>{c.table}</code>{' '}
+                      {c.same_value === 1 ? 'carries' : 'carry'} this same value.
                     </p>
                   )}
                   {c.elsewhere && c.elsewhere.length > 0 && (
@@ -265,7 +266,10 @@ export default function DrillDown({ target }: { target: DrillTarget }) {
                           >
                             {e.table}.{e.column}
                           </button>
-                          <span className="dim"> {fmtCount(e.rows)} rows</span>
+                          <span className="dim">
+                            {' '}
+                            {fmtCount(e.rows)} {e.rows === 1 ? 'row' : 'rows'}
+                          </span>
                         </li>
                       ))}
                     </ul>

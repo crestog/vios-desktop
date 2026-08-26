@@ -144,6 +144,37 @@ export interface ArchiveStatus {
   [k: string]: unknown;
 }
 
+/**
+ * `/api/status` — the composite envelope the server actually returns.
+ *
+ * Worth spelling out, because the archive counts live one level down: `search`
+ * holds `videos` / `moments` / `playable`, and its siblings describe the
+ * machinery around them. Reading `videos` off the top level yields `undefined`,
+ * which `fmtCount` honestly prints as an em dash — so the bug looks like an
+ * empty archive rather than like a wrong path, on a database that has rows.
+ */
+export interface StatusEnvelope {
+  ok?: boolean;
+  /** `idle | scanning | indexing | ready | error`, plus why. */
+  boot?: {
+    phase: string;
+    detail: string;
+    error: string;
+    elapsed: number;
+    [k: string]: unknown;
+  };
+  ingest?: Record<string, unknown>;
+  index?: Record<string, unknown>;
+  /** The archive counts every screen quotes. */
+  search?: ArchiveStatus;
+  graph?: GraphCounts;
+  map?: Record<string, unknown>;
+  bundles?: number;
+  cache?: Record<string, unknown>;
+  telegram?: { configured: boolean; missing: string[]; channel: number };
+  [k: string]: unknown;
+}
+
 /** `/api/video/{key}` — every fact in the database about one reel. */
 export interface VideoDetail {
   ok: boolean;
@@ -212,7 +243,16 @@ export interface SchemaTable {
   key: string | null;
   start: string | null;
   end: string | null;
+  /** Search reads this table's text. False for everything Atlas wrote itself. */
   indexed: boolean;
+  /**
+   * This table has a key and prose columns, so search would read it, and does
+   * not — because Atlas wrote it. `moments` is the case worth labelling: it holds
+   * every searchable passage in the archive and is not itself a source, so
+   * `indexed: false` on it looks like a contradiction until you know that.
+   * Absent on a table search skips for the ordinary reason of having no text.
+   */
+  own?: boolean;
   columns: SchemaColumn[];
 }
 
@@ -1231,4 +1271,303 @@ export interface BundlesResponse {
     via: string | null;
   }>;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STUDIO
+// ─────────────────────────────────────────────────────────────────────────────
+// `studio.py`. Three read-only routes over the same four tables Search reads.
+//
+// The single most important thing about these types: **every number is
+// nullable, and null does not mean zero.** `studio._stats` returns nulls for an
+// empty sample and `_row_features` returns null for any rate whose denominator
+// is missing, precisely so that a reel with no detected shots is absent from the
+// cut-rate distribution rather than counted as having a cut rate of zero. A
+// `?? 0` anywhere in the view would put that lie back.
+
+/** `studio._stats` — the five-number summary plus dispersion. */
+export interface Stats {
+  /** How many reels (or shots, or slots) this summary is actually made of. */
+  n: number;
+  mean: number | null;
+  median: number | null;
+  p10: number | null;
+  p90: number | null;
+  min: number | null;
+  max: number | null;
+  /** Population standard deviation, not the sample estimate. */
+  sd: number | null;
+  /** σ/μ. Null when the mean is zero — σ/0 is not a large number. */
+  cv: number | null;
+}
+
+/** One ranked term from the log-odds test. `z` is what the list is sorted by. */
+export interface Phrase {
+  term: string;
+  z: number;
+  log_odds: number;
+  n_in: number;
+  n_out: number;
+  per_k_in: number;
+  per_k_out: number;
+}
+
+export interface StudioScope {
+  /** `archive` reads everything, `goal` ran a search, `filter` is creator/category. */
+  mode: string;
+  goal: string;
+  creator: string;
+  category: string;
+  /** A sentence naming the scope, including any fallback that happened. */
+  note: string;
+  /** Total reels in the index, so a scope can be read as a fraction of it. */
+  archive: number;
+}
+
+export interface Pacing {
+  shots: number;
+  cuts: number;
+  /** Null when no shots were detected — not zero. */
+  cuts_per_min: number | null;
+  /** 1 − CV of shot length, clamped 0–1. A metronome scores 1. */
+  regularity: number | null;
+  shot_len: Stats;
+  longest_hold: { t0: number; t1: number; len: number } | null;
+  covered_s: number;
+  /** Detected shot seconds over runtime. May exceed 1; deliberately unclamped. */
+  coverage: number | null;
+}
+
+export interface ChannelPresence {
+  source: string;
+  moments: number;
+  covered_s: number;
+  /** Merged covered seconds over runtime. Exceeds 1 for whole-file channels. */
+  share: number | null;
+  first_at: number;
+  last_at: number;
+  words: number;
+  chars: number;
+  weight: number;
+}
+
+export interface StudioSection {
+  n: number;
+  bin0: number;
+  bin1: number;
+  t0: number;
+  t1: number;
+  len: number;
+  share: number;
+  /** Channel → mean occupancy 0–1 within this section. Zero entries dropped. */
+  mix: Record<string, number>;
+  /** e.g. `speech + caption-led`. A measurement, not a semantic name. */
+  label: string;
+  lead: string;
+}
+
+export interface StudioHook {
+  window_s: number;
+  moments: number;
+  channels: string[];
+  /** What is on screen at t=0 — stricter, and the question people mean. */
+  first_frame_channels: string[];
+  cuts: number;
+  words: number;
+  words_per_s: number | null;
+  first_speech_at: number | null;
+  silent_open: boolean;
+  text: Array<{ source: string; t: number; text: string }>;
+}
+
+/**
+ * `studio._video`. Deliberately *not* {@link VideoItem}: that one types
+ * `sources` as `Record<string, number> | string` because search and library
+ * each return it their own way, and `studio._video` splits it into a plain
+ * `string[]`. Reusing VideoItem here would type this field as something it
+ * never is.
+ */
+export interface StudioVideo {
+  video_key: string;
+  title: string;
+  caption: string;
+  creator: string;
+  category: string;
+  duration: number;
+  width: number | null;
+  height: number | null;
+  fps: number;
+  size_mb: number;
+  likes: number | null;
+  created_at: number | null;
+  poster: string;
+  moment_count: number;
+  /** `{source: moments}` from `video_index.sources`, which stores JSON. */
+  sources: Record<string, number>;
+  has_speech: boolean;
+  has_narrative: boolean;
+  text_len: number;
+}
+
+export interface DeconstructResponse {
+  ok: true;
+  video: StudioVideo;
+  duration: number;
+  /** `index` | `evidence` | `unknown` — where the runtime came from. */
+  duration_from: string;
+  pacing: Pacing;
+  channels: ChannelPresence[];
+  timeline: {
+    /** Column order for every row of `matrix`. */
+    channels: string[];
+    bins: number;
+    bin_s: number;
+    /** `[bin][channel]` occupancy 0–1. Empty when nothing is timed. */
+    matrix: number[][];
+  };
+  sections: StudioSection[];
+  hook: StudioHook;
+  gaps: Array<{ t0: number; t1: number; len: number }>;
+  claims: Array<{ kind: string; name: string; confidence: number; t0: number; t1: number }>;
+  density: {
+    words: number;
+    words_per_s: number | null;
+    ocr_chars_per_s: number | null;
+    moments_per_min: number | null;
+    channels_used: number;
+  };
+  moments: number;
+  /** Plain sentences for every part of the answer that is thin, and why. */
+  notes: string[];
+}
+
+/** Tertile cut points, or a stated reason there are none. */
+export interface Band {
+  ok: boolean;
+  names: string[];
+  edges: number[];
+  why: string;
+}
+
+export interface Archetype {
+  pace: string;
+  talk: string;
+  n: number;
+  examples: Array<{
+    video_key: string;
+    title: string;
+    cuts_per_min: number | null;
+    speech_share: number | null;
+  }>;
+}
+
+export interface ReelFeatures {
+  video_key: string;
+  title: string;
+  creator: string;
+  category: string;
+  duration: number | null;
+  shots: number;
+  cuts_per_min: number | null;
+  shot_len: number | null;
+  regularity: number | null;
+  moments: number;
+  moments_per_min: number | null;
+  words: number;
+  words_per_s: number | null;
+  speech_share: number | null;
+  shares: Record<string, number | null>;
+  channels: string[];
+}
+
+export interface PatternsResponse {
+  ok: true;
+  scope: StudioScope;
+  reels: number;
+  measures: {
+    duration: Stats;
+    cuts_per_min: Stats;
+    shot_len: Stats;
+    regularity: Stats;
+    moments_per_min: Stats;
+    words_per_s: Stats;
+    speech_share: Stats;
+  };
+  channels: Array<{
+    source: string;
+    n: number;
+    /** Share of reels carrying this channel at all. */
+    rate: number | null;
+    /** Distribution of runtime share among the reels that carry it. */
+    share: Stats;
+  }>;
+  hook: {
+    /** Denominator for every rate below. */
+    reels: number;
+    opens_with: Array<{ source: string; n: number; rate: number | null }>;
+    leads_with: Array<{ source: string; n: number; rate: number | null }>;
+    silent_open: { n: number; rate: number | null };
+    words: Stats;
+    cuts: Stats;
+    first_speech_at: Stats;
+    phrases: Phrase[];
+    phrase_basis: { hook_terms: number; rest_terms: number };
+  };
+  bands: { pace: Band; talk: Band };
+  archetypes: Archetype[];
+  /** Capped at 60 — the per-reel table, not the whole scope. */
+  reel_rows: ReelFeatures[];
+  method: {
+    phrases: string;
+    bands: string;
+    hook_window: number;
+    compared: string;
+  };
+  notes: string[];
+}
+
+export interface Beat {
+  name: string;
+  /** Proportion of runtime this slot occupies, by convention. */
+  p0: number;
+  p1: number;
+  /** The same slot in seconds, against the scope's median runtime. */
+  t0: number;
+  t1: number;
+  len: number;
+  lead: string | null;
+  lead_rate: number | null;
+  leads: Array<{ source: string; n: number; rate: number | null }>;
+  /** How many reels voted on the lead — the denominator for `lead_rate`. */
+  voters: number;
+  cuts: Stats;
+  words: Stats;
+  phrases: Phrase[];
+  examples: Array<{
+    video_key: string;
+    title: string;
+    source: string;
+    t: number;
+    weight: number;
+    text: string;
+  }>;
+}
+
+export interface ScriptResponse {
+  ok: true;
+  scope: StudioScope;
+  reels: number;
+  /** Median runtime of the scope; every beat's seconds are a share of this. */
+  target_s: number;
+  duration: Stats;
+  beats: Beat[];
+  outline: {
+    head: string;
+    lines: Array<{ name: string; headline: string; points: string[] }>;
+    /** The whole sheet as plain text, for copying. A rendering of `beats`. */
+    text: string;
+  };
+  method: { slots: string; numbers: string; phrases: string; prose: string };
+  notes: string[];
+}
+
 

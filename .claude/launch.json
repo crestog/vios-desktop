@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vios-desktop",
+      "url": "http://localhost:7000",
+      "port": 7000
+    }
+  ]
+}

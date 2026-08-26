@@ -41,7 +41,10 @@ export default function HomeView(_props: ViewProps) {
   const mirror = useMirror();
   const engine = useEngine();
 
-  const s = status.data;
+  // `/api/status` is an envelope: the counts are in `search`, and the sibling
+  // blocks describe the machinery. Reading them off the top level is how this
+  // screen once showed five em dashes over a database with rows in it.
+  const s = status.data?.search;
   const items = recent.data?.results || [];
   const channels = useMemo(
     () => channelTally(s?.by_source || facets.data?.sources),
@@ -70,7 +73,15 @@ export default function HomeView(_props: ViewProps) {
     if (q) go('search', { params: { q } });
   };
 
-  const hours = s?.seconds ? s.seconds / 3600 : null;
+  // Hours are the right unit for an archive and the wrong one for a start: four
+  // seconds of footage rounds to "0.0 h", which reads as an empty library. Under
+  // an hour this says the clock time instead.
+  const footage =
+    !s?.seconds
+      ? '—'
+      : s.seconds >= 3600
+        ? `${(s.seconds / 3600).toFixed(s.seconds < 36000 ? 1 : 0)} h`
+        : fmtDur(s.seconds);
 
   return (
     <div className="view home">
@@ -118,36 +129,47 @@ export default function HomeView(_props: ViewProps) {
 
         <section className="stat-row">
           <Stat
-            label="reels"
+            label={s?.videos === 1 ? 'reel' : 'reels'}
             value={fmtCount(s?.videos)}
             loading={status.first && status.loading}
             to={href('library')}
           />
           <Stat
-            label="claims on record"
+            label={s?.moments === 1 ? 'claim on record' : 'claims on record'}
             value={fmtCount(s?.moments)}
             loading={status.first && status.loading}
             note="one per passage of evidence — a transcript line, an OCR string, a description"
           />
           <Stat
             label="of footage"
-            value={hours === null ? '—' : `${hours.toFixed(hours < 10 ? 1 : 0)} h`}
+            value={footage}
             loading={status.first && status.loading}
           />
           <Stat
-            label="creators"
+            label={(s?.creators ?? facets.data?.creators?.length) === 1 ? 'creator' : 'creators'}
             value={fmtCount(s?.creators ?? facets.data?.creators?.length)}
             loading={status.first && status.loading}
           />
           <Stat
             label="playable here"
+            // A share only when the numerator is a subset of the denominator.
+            // `playable` counts video files on this disk, indexed or not, so a
+            // half-rebuilt index can leave more files than reels — and "300%"
+            // is a worse way to say that than the note below.
             value={
-              s?.playable !== undefined && s?.videos
+              s?.playable !== undefined && s?.videos && s.playable <= s.videos
                 ? `${fmtCount(s.playable)} · ${fmtPct(s.playable, s.videos)}`
                 : fmtCount(s?.playable)
             }
             loading={status.first && status.loading}
-            note="the file is on this disk or reachable in the channel"
+            note={
+              s?.playable !== undefined && s?.videos && s.playable > s.videos
+                ? `${fmtCount(s.playable)} video files are on this disk but only ` +
+                  `${fmtCount(s.videos)} ${s.videos === 1 ? 'is' : 'are'} in the ` +
+                  `index — the rest were imported before the last rebuild, or ` +
+                  `their evidence never arrived`
+                : 'the file is on this disk or reachable in the channel'
+            }
           />
         </section>
 

@@ -936,13 +936,17 @@ def api_table(name: str, limit: int = 50, offset: int = 0, q: str = "",
               order: str = "", desc: bool = False):
     """A generic row browser for any table in the bundle.
 
-    The table name is checked against `reflect.tables()` rather than escaped,
+    The table name is checked against `reflect.browsable()` rather than escaped,
     and the sort column against that table's real columns. An allow-list built
     from the live schema is the one form of SQL-injection defence that cannot
     be got subtly wrong, and it costs one lookup.
+
+    `browsable()` and not `tables()`: the latter is search's list, and being
+    invisible to search is not a reason to be unopenable — `moments` is the
+    single table this browser exists to show.
     """
     conn = db()
-    if name not in reflect.tables(conn):
+    if name not in reflect.browsable(conn):
         return JSONResponse({"ok": False, "note": f"no table named {name}"},
                             status_code=404)
 
@@ -983,6 +987,7 @@ def api_table(name: str, limit: int = 50, offset: int = 0, q: str = "",
 
     rowids = [r[0] for r in raw] if has_rowid else []
     rows = [r[1:] for r in raw] if has_rowid else raw
+    rows = [[reflect.cell_value(v) for v in r] for r in rows]
 
     return {"ok": True, "table": name, "columns": col_names,
             "types": [c["type"] for c in cols], "rows": rows,
@@ -1012,7 +1017,7 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
     bundle carrying a table Atlas has never seen still explains itself.
     """
     conn = db()
-    if table not in reflect.tables(conn):
+    if table not in reflect.browsable(conn):
         return JSONResponse({"ok": False, "note": f"no table named {table}"},
                             status_code=404)
     cols = reflect.columns(conn, table)
@@ -1035,18 +1040,25 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
             cur = conn.execute(f'SELECT * FROM "{table}" WHERE rowid = ?', (rowid,))
             got = cur.fetchone()
             if got:
-                row = dict(zip([d[0] for d in cur.description], got))
+                row = {d[0]: reflect.cell_value(v)
+                       for d, v in zip(cur.description, got)}
         except sqlite3.Error:
             row = {}
     if value is None:
         value = row.get(column)
 
+    # Whether search reads this column is two questions, not one: the column has
+    # to look like prose *and* the table has to be one search reads. `moments` is
+    # search's own output, so "indexed" over its `text` would be a UI claiming a
+    # row is findable through the very table that holds the findings.
+    reads = reflect.searched(table)
+
     out = {
         "ok": True, "table": table, "column": column, "value": value,
         "role": role, "type": col["type"] or "TEXT", "pk": col["pk"],
-        "indexed": column in content,
+        "indexed": reads and column in content,
         "source": (reflect.source_label(table, column)
-                   if column in content else None),
+                   if reads and column in content else None),
         "row": row, "refers_to": None, "same_value": None, "elsewhere": [],
         "video_key": None,
         # Named so the caller can open the reel at the moment this row is
@@ -1083,7 +1095,8 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
         if got:
             out["refers_to"] = {
                 "table": link["table"], "on": link["remote"],
-                "row": dict(zip([d[0] for d in cur.description], got)),
+                "row": {d[0]: reflect.cell_value(v)
+                        for d, v in zip(cur.description, got)},
             }
         break
 
@@ -1097,8 +1110,10 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
 
     # And who else says it. Only same-named columns are checked: matching a
     # value across unrelated columns would pair a like count with a msg id.
+    # Over `browsable()`, so a video key found in `claim` reports the 41 rows
+    # `moments` holds for the same reel — which is the answer, and was missing.
     norm = reflect._norm(column)                                # noqa: SLF001
-    for other in reflect.tables(conn):
+    for other in reflect.browsable(conn):
         if other == table:
             continue
         for oc in reflect.columns(conn, other):

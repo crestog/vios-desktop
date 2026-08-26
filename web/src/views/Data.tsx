@@ -127,16 +127,18 @@ export default function DataView({ route }: ViewProps) {
         <strong>{table || 'The raw database'}</strong>
         {meta && (
           <span className="dim">
-            {fmtCount(meta.rows)} rows · {meta.columns.length} columns
+            {fmtCount(meta.rows)} {meta.rows === 1 ? 'row' : 'rows'} ·{' '}
+            {meta.columns.length} {meta.columns.length === 1 ? 'column' : 'columns'}
             {meta.indexed ? ' · full-text indexed' : ''}
+            {meta.own ? ' · written by Atlas' : ''}
           </span>
         )}
         <span className="spacer" />
         {table && (
           <>
-            <div className="search-box">
+            <div className="search-box-wrap">
               <input
-                className="input-text"
+                className="input-text search-box"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder={`filter ${table}…`}
@@ -145,7 +147,7 @@ export default function DataView({ route }: ViewProps) {
               />
               {filter && (
                 <button
-                  className="btn-icon"
+                  className="btn-icon sbw-clear"
                   onClick={() => setFilter('')}
                   title="clear the filter"
                 >
@@ -206,14 +208,25 @@ export default function DataView({ route }: ViewProps) {
                   key={t.name}
                   className={`tbl${t.name === table ? ' is-active' : ''}`}
                   href={href('data', { params: { table: t.name } })}
-                  title={`${t.name} — ${fmtCount(t.rows)} rows${
+                  title={`${t.name} — ${fmtCount(t.rows)} ${t.rows === 1 ? 'row' : 'rows'}${
                     t.key ? `, keyed on ${t.key}` : ', no key column'
+                  }${t.indexed ? ', read by search' : ''}${
+                    t.own ? ', written by Atlas itself' : ''
                   }`}
                 >
                   <span className="tbl-n">{t.name}</span>
                   <span className="tbl-r">{fmtCount(t.rows)}</span>
                 </a>
               ))
+            )}
+            {/* One table is missing from this list on purpose, and a list that
+                silently omits a row is the thing this whole view exists to be
+                the opposite of. `vec_payload` holds image vectors as raw float
+                buffers; there is nothing to read in a cell of it. */}
+            {!schema.loading && !schema.error && tables.length > 0 && (
+              <div className="rail-note" title="raw float buffers — a BLOB per vector, with no text in it to show">
+                <code>vec_payload</code> is not listed: it is binary.
+              </div>
             )}
           </div>
         </aside>
@@ -457,6 +470,7 @@ function SchemaOverview({ tables, loading }: { tables: SchemaTable[]; loading: b
               {t.key ? `keyed on ${t.key}` : 'no key column'}
               {t.start ? ` · timed on ${t.start}${t.end ? `–${t.end}` : ''}` : ''}
               {t.indexed ? ' · searchable' : ''}
+              {t.own ? ' · written by Atlas' : ''}
             </div>
           </a>
         ))}

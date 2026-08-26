@@ -144,6 +144,15 @@ _ATLAS_OWN = {"moments", "moments_fts", "bundles", "atlas_meta", "ingest_log",
               "video_index", "graph_nodes", "graph_edges", "parts",
               "vec_payload", "coverage", "scan_seen", "map_point"}
 
+# Every reason above is a reason not to *index* a table. None of them is a reason
+# not to let a person read it, and for two of these it is the opposite: `moments`
+# is the evidence itself and `video_index` is one row per reel, which makes them
+# the two tables someone opens the raw browser to see. So `_ATLAS_OWN` gates
+# `tables()` (what search reads) and this gates `browsable()` (what a person can
+# open), and the only name in both is the one the paragraph above rules out on its
+# own terms — `vec_payload` is float buffers in a BLOB, unreadable as text.
+_BROWSE_HIDE = {"vec_payload"}
+
 _FTS_SHADOW = re.compile(r"_(data|idx|content|docsize|config)$")
 _TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
 
@@ -160,12 +169,14 @@ def _tokens(name: str) -> list:
 # ══════════════════════════════════════════════════════════════════════════
 # RAW INTROSPECTION
 # ══════════════════════════════════════════════════════════════════════════
-def tables(conn: sqlite3.Connection) -> list:
-    """Every real table a human would want to look at, in a stable order.
+def _real_tables(conn: sqlite3.Connection) -> list:
+    """Every table and view that physically holds rows, in a stable order.
 
     Virtual tables are excluded by reading `sql`, not by name: sqlite_master
     reports an fts5 index with type='table', so `posts_search` looks exactly
-    like a real table until you notice its DDL says CREATE VIRTUAL TABLE.
+    like a real table until you notice its DDL says CREATE VIRTUAL TABLE. The
+    four shadow tables fts5 keeps per index are excluded by suffix, which is the
+    only thing that marks them.
     """
     try:
         rows = conn.execute(
@@ -176,15 +187,35 @@ def tables(conn: sqlite3.Connection) -> list:
         return []
     out = []
     for name, _kind, sql in rows:
-        low = name.lower()
         if "CREATE VIRTUAL TABLE" in (sql or "").upper():
             continue
-        if _FTS_SHADOW.search(low):     # fts5 keeps four shadow tables per index
-            continue
-        if low in _ATLAS_OWN:
+        if _FTS_SHADOW.search(name.lower()):
             continue
         out.append(name)
     return out
+
+
+def tables(conn: sqlite3.Connection) -> list:
+    """Every table search should read, in a stable order.
+
+    This is the indexer's, the graph's and `text_sources`' view of the file:
+    Atlas's own output is filtered out, because feeding search its own moments
+    back to it is how one transcript line becomes two hits.
+    """
+    return [t for t in _real_tables(conn) if t.lower() not in _ATLAS_OWN]
+
+
+def browsable(conn: sqlite3.Connection) -> list:
+    """Every table a person can open in the raw browser, in a stable order.
+
+    `tables()` and this differ by `_ATLAS_OWN`, and the difference is the whole
+    point: one question is "what should search read", the other is "what can be
+    read". Answering both from one list is why the Data tab shipped listing four
+    of this file's nineteen tables — `claim`, `shot`, and two empty map tables —
+    with `moments` and `video_index` missing, under a heading that promises every
+    table Atlas writes.
+    """
+    return [t for t in _real_tables(conn) if t.lower() not in _BROWSE_HIDE]
 
 
 def columns(conn: sqlite3.Connection, table: str) -> list:
@@ -202,6 +233,31 @@ def row_count(conn: sqlite3.Connection, table: str) -> int:
         return conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
     except sqlite3.Error:
         return 0
+
+
+def searched(table: str) -> bool:
+    """Does search read this table's text, or is it search's own output?
+
+    A predicate rather than an exported set, because every caller wants the
+    question and not the list, and one of them is a UI that would otherwise
+    print "searchable" over `moments.text`.
+    """
+    return (table or "").lower() not in _ATLAS_OWN
+
+
+def cell_value(value):
+    """One stored value, rendered so it can survive being JSON.
+
+    SQLite will hand back `bytes` for any BLOB, and FastAPI's encoder turns
+    `bytes` into a string by decoding it as UTF-8 — which raises on a float
+    buffer or a thumbnail and answers the request with a 500. A browser that
+    promises to open a database it has never seen cannot fall over on a column
+    type, so a blob renders as its size. `vec_payload` is excluded from browsing
+    outright; this is for the blob nobody predicted, in an imported shard.
+    """
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"‹{len(bytes(value)):,} bytes›"
+    return value
 
 
 def fingerprint(conn: sqlite3.Connection) -> str:
@@ -529,20 +585,34 @@ def describe(conn: sqlite3.Connection, samples: int = 0) -> dict:
     Roles are returned alongside the raw columns so the UI can mark which column
     is the key and which carry searchable text — the same inference search uses,
     shown to the person looking at it.
+
+    It walks `browsable()`, not `tables()`: this is the reader's view of the
+    file, and the reader wants `moments` most of all. `indexed` still answers
+    search's question, so a table Atlas wrote reads as "not searchable" even
+    though its text columns would qualify — `moments.text` is not indexed, it
+    *is* the index.
     """
     out = {"fingerprint": fingerprint(conn), "tables": []}
-    for table in tables(conn):
+    for table in browsable(conn):
         cols = columns(conn, table)
         key = key_column(cols)
         start, end = time_columns(cols)
         content = set(content_columns(cols))
+        reads = searched(table)
         entry = {
             "name": table,
             "rows": row_count(conn, table),
             "key": key,
             "start": start,
             "end": end,
-            "indexed": bool(key and content),
+            "indexed": bool(key and content) and reads,
+            # Set only where the flag above needs explaining: this table has a key
+            # and prose columns, so search *would* read it, and does not because
+            # Atlas wrote it. `moments` is the clearest case — it holds every
+            # passage search can find and is not itself a source. A table search
+            # skips for the ordinary reason that it has no text in it (`shot`) is
+            # not labelled, because there is nothing surprising to explain.
+            "own": bool(key and content) and not reads,
             "columns": [{
                 "name": c["name"],
                 "type": c["type"] or "TEXT",
@@ -551,8 +621,12 @@ def describe(conn: sqlite3.Connection, samples: int = 0) -> dict:
                          "start" if c["name"] == start else
                          "end" if c["name"] == end else
                          "content" if c["name"] in content else "field"),
+                # A channel label is a claim about what search calls this text.
+                # On a table search never reads it would be a guess presented as
+                # a fact — and on `moments` a wrong one, since that table carries
+                # the real answer in its own `source` column.
                 "source": (source_label(table, c["name"])
-                           if c["name"] in content else None),
+                           if reads and c["name"] in content else None),
             } for c in cols],
         }
         if samples:
@@ -560,7 +634,8 @@ def describe(conn: sqlite3.Connection, samples: int = 0) -> dict:
                 cur = conn.execute(
                     f'SELECT * FROM {_q(table)} LIMIT {int(samples)}')
                 names = [d[0] for d in cur.description]
-                entry["sample"] = [dict(zip(names, r)) for r in cur.fetchall()]
+                entry["sample"] = [{n: cell_value(v) for n, v in zip(names, r)}
+                                   for r in cur.fetchall()]
             except sqlite3.Error:
                 entry["sample"] = []
         out["tables"].append(entry)
