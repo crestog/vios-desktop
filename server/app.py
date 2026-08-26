@@ -48,6 +48,76 @@ SUB = "SYS"
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# THE BACKGROUND WORKERS
+# ══════════════════════════════════════════════════════════════════════════
+def _off(name: str) -> bool:
+    """Is this `VIOS_*_AUTOSTART` switch turned off? Follows `capture.backfill`."""
+    return str(os.environ.get(name, "1")).strip().lower() in (
+        "0", "false", "no", "off")
+
+
+def start_workers() -> None:
+    """Start the two daemon workers this window owns. Never raises; logs instead.
+
+    Neither of them was started anywhere. `mirror.start()` and
+    `engine_queue.start()` both existed, both were reachable over POST, and both
+    were only ever called by a person pressing a button — so a fresh install
+    mirrored nothing until someone found the Admin tab, and a reel queued for
+    derive sat in `engine_jobs` in `pending` forever while the Engine tab
+    truthfully reported a worker that was idle because it did not exist.
+
+    Both are idempotent and both raise the pause/resume routes' state, not this
+    function's, so pressing pause still pauses and a later `start` is a no-op
+    rather than a second thread.
+
+    **The mirror runs even with no Telegram credentials**, which looks wrong and
+    is not: half of what it does is derive proxies, sprites and keyframes for
+    files already on this disk, and that is the half that makes playback instant.
+    Only the download half needs the channel, and it now returns early when the
+    channel is unreachable instead of failing once per reel per cycle.
+
+    `VIOS_MIRROR_AUTOSTART=0` and `VIOS_ENGINE_AUTOSTART=0` opt out — for a
+    session opened to read the archive rather than to fill it in.
+    """
+    import engine_queue                                        # noqa: PLC0415
+    import mirror                                              # noqa: PLC0415
+
+    for name, flag, start, what in (
+            ("mirror", "VIOS_MIRROR_AUTOSTART", mirror.start,
+             "downloads what is only in the channel, derives what is on disk"),
+            ("engine", "VIOS_ENGINE_AUTOSTART", engine_queue.start,
+             "runs the components queued against a reel")):
+        if _off(flag):
+            log(f"{name} worker not started — {flag}=0", SUB)
+            continue
+        try:
+            start()
+            log(f"{name} worker started — {what}", SUB)
+        except Exception as e:                                  # noqa: BLE001
+            log(f"{name} worker did not start — {type(e).__name__}: {e}",
+                SUB, "WARN")
+
+
+def _stop_workers() -> None:
+    """Ask both workers to finish on the way down. Never raises.
+
+    They are daemon threads, so the process can exit without this — but a
+    download in flight leaves a `.part` file behind, and `stop()` sets the event
+    the loop checks between items. It is the difference between a clean shutdown
+    and one that always has something to clean up next time.
+    """
+    import engine_queue                                        # noqa: PLC0415
+    import mirror                                              # noqa: PLC0415
+
+    for name, stop in (("mirror", mirror.stop), ("engine", engine_queue.stop)):
+        try:
+            stop()
+        except Exception as e:                                  # noqa: BLE001
+            log(f"{name} worker did not stop cleanly — "
+                f"{type(e).__name__}: {e}", SUB, "WARN")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # ROUTE ADOPTION
 # ══════════════════════════════════════════════════════════════════════════
 def _adopt(app: FastAPI, router, label: str, keep=lambda p: True) -> int:
@@ -183,7 +253,8 @@ def create_app() -> FastAPI:
         Atlas's own boot — channel scan, then index — runs in a daemon thread
         started here rather than awaited, because the window must be
         interactive against local sqlite in well under two seconds and the
-        channel is a network away.
+        channel is a network away. The mirror and the engine queue start the
+        same way and for the same reason — see `start_workers`.
         """
         try:
             import anyio.to_thread
@@ -197,8 +268,10 @@ def create_app() -> FastAPI:
                 f"{type(e).__name__}: {e}", SUB, "WARN")
 
         atlas_server.start_boot()
+        start_workers()
         log("app up — boot running in the background", SUB)
         yield
+        _stop_workers()
         log("app down", SUB)
 
     app = FastAPI(title="VIOS", docs_url="/api/docs", redoc_url=None,

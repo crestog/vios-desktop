@@ -132,6 +132,15 @@ def _download_video(item: Dict[str, Any]) -> bool:
         except (ValueError, TypeError):
             return False
 
+    # No credentials means no channel, and the worker comes back every 30 s for
+    # every video that is missing. Without this the log fills with the same
+    # failure per reel per cycle, and the useful half of this worker — deriving
+    # proxies for the files that *are* on disk — is buried under it. The mirror
+    # still runs on a machine with no Telegram: it just cannot fetch what is
+    # only in the channel.
+    if not config.telegram_ready():
+        return False
+
     dest = os.path.join(paths.VIDEO_DIR, f"{safe_name(key)}.mp4")
     tmp = dest + ".part"
 
