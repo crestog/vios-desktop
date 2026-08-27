@@ -568,6 +568,24 @@ a.sb-seg:hover {
   background: var(--accent-primary);
   transition: width var(--transition-normal);
 }
+/* The segmented variant, used once: the disk bar, where five categories sit side
+   by side. Two changes from the plain meter, both because five fills is not one
+   fill. It is 8px rather than 6 — five segments in a 6px bar makes the smallest
+   two unhittable for the `title` that names them — and there is a 1px gap, so
+   the track colour shows through as a hairline boundary. Without it `--st-proxy`
+   (#818cf8) meeting `--st-derived` (#6366f1) reads as a single block, because
+   those two are adjacent steps of one indigo ramp by design. The gaps come out
+   of the free remainder, not off the end of the bar. */
+.meter-seg {
+  height: 8px;
+  gap: 1px;
+}
+/* A floor, because a percentage of a 200 GB disk is not a pixel: 28 MB of proxies
+   measured 0.0 px wide on this machine, so three real categories were drawn as
+   nothing and the `title` naming each one had no box to hover. The component only
+   emits a fill when the category has bytes in it, so a floor here can never
+   invent a category that is empty — it can only make a small one visible. */
+.meter-seg .meter-fill { min-width: 2px; }
 
 /* ── Rail list item (a table in Data, anything selectable in a rail) ── */
 .tbl {
@@ -1101,6 +1119,15 @@ a.sb-seg:hover {
 
 .dt-cell { padding: 0 !important; }
 .dt-cell.is-num .cell-btn { text-align: right; font-variant-numeric: tabular-nums; }
+/* A null prints the word "null", which at full contrast is indistinguishable from
+   a row that genuinely stores that string. Set on the cell rather than the button
+   so `.cell-btn`'s `color: inherit` carries it down — which also means
+   `.cell-btn:hover` below takes it straight back off, because a direct rule beats
+   an inherited value outright. That is the intent: the dimming is for reading the
+   column at rest, and a null is still a cell you can open, since "which rows are
+   missing this" is a real question. The italic is what survives the hover.
+   Matches `.cell-null`, the same treatment one panel over. */
+.dt-cell.is-null { color: var(--text-disabled); font-style: italic; }
 .cell-btn {
   display: block;
   width: 100%;
@@ -1696,6 +1723,12 @@ a.sb-seg:hover {
 .cap-stat.cs-failed .n { color: var(--state-warning); }
 .cap-stat.cs-unavailable .n { color: var(--state-error); }
 .cap-stat.cs-skipped .n { color: var(--text-tertiary); }
+/* `queued` was the one state with no line here, so its figure rendered at the
+   base `.stat .n` colour — `--text-pure` — while the chip for that same state in
+   the table below reads `--text-tertiary`. The comment above promises a colour
+   cannot mean one state in one place and a different one ten pixels lower; this
+   is the line that made the promise false. */
+.cap-stat.cs-queued .n { color: var(--text-tertiary); }
 
 .cchip {
   display: inline-block;
@@ -2144,6 +2177,25 @@ a.sb-seg:hover {
   color: var(--state-warning);
   background: rgba(251, 191, 36, 0.09);
   border-color: rgba(251, 191, 36, 0.28);
+}
+/* The other half of the same list, and it gets a surface instead of a hue on
+   purpose: `replaced` is a change to your machine and wears the warning colour,
+   `kept` is the absence of one. Filling it in a second colour would put two
+   equally loud pills down the column and make an apply look busier than it is —
+   but leaving it as the bare base was worse, because then a row that changes
+   nothing looked like a row nobody had classified.
+
+   `--surface-3` and not the obvious `--surface-1`, which is what this started as
+   and which measured identical to the row behind it: `.row-item` is itself
+   `--surface-1`, so the fill was a no-op and only the border was doing any work.
+   `--surface-2` is the next trap along — that is `.row-item:hover`, so the pill
+   would vanish again the moment you pointed at the row it sits in. Three is the
+   first step that stays a box in both states, and it is still a neutral, so the
+   column reads as one amber verb among grey ones. */
+.adm-eff.is-keep {
+  color: var(--text-secondary);
+  background: var(--surface-3);
+  border-color: var(--border-default);
 }
 .adm-eff-body { min-width: 0; }
 .adm-eff-body b { font-size: 12.5px; font-weight: 600; }

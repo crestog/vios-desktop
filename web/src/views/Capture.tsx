@@ -99,9 +99,16 @@ import type {
 
 /* ── The six ledger states, in the order a row travels through them ──
    `unavailable` and `skipped` are terminal and *not* failures, which is why
-   they get their own colours rather than sharing `failed`'s red. */
-const STATES: Array<{ key: string; label: string; cls: string; why: string }> = [
-  { key: '', label: 'all', cls: 'cs-all', why: 'every row in the ledger' },
+   they get their own colours rather than sharing `failed`'s red.
+
+   `cls` is optional because the leading `all` entry is not a state and never
+   reaches a `className`: the counts row filters it out (`.filter((s) => s.key)`),
+   the segmented control renders labels, and the two chip sites look a row's own
+   state up by key — which is never the empty string. It carried a `cs-all` for
+   long enough that the CSS audit reported the class as unstyled; the class was
+   the dead thing, not the rule. */
+const STATES: Array<{ key: string; label: string; cls?: string; why: string }> = [
+  { key: '', label: 'all', why: 'every row in the ledger' },
   { key: 'queued', label: 'queued', cls: 'cs-queued', why: 'waiting its turn' },
   { key: 'fetching', label: 'fetching', cls: 'cs-fetching', why: 'in flight right now' },
   { key: 'uploaded', label: 'captured', cls: 'cs-uploaded', why: 'in the channel — done' },
@@ -414,7 +421,7 @@ export default function CaptureView({ route }: ViewProps) {
             {STATES.filter((s) => s.key).map((s) => (
               <a
                 key={s.key}
-                className={`stat cap-stat ${s.cls}${
+                className={`stat cap-stat ${s.cls ?? ''}${
                   s.key === stateFilter && tab === 'queue' ? ' is-active' : ''
                 }`}
                 href={href('capture', { params: { tab: 'queue', state: s.key } })}
