@@ -900,11 +900,74 @@ a.sb-seg:hover {
   z-index: 110;
 }
 
-/* ── Facets ── */
-.facet {
+/* ── Facets: the rail that narrows a search ──
+   Two shapes, and they used to share one class. `.facet` was written as the
+   clickable value row — the thing you press to filter by one creator — and the
+   markup now uses it as the *collapsible group* that holds those rows. A
+   selector that means one thing to the stylesheet and another to the component
+   is worse than a missing one, because both look correct in isolation. So the
+   row treatment moved to `.facet-v`, where the markup actually puts it, and
+   `.facet` is the group.
+
+   The body is conditionally rendered rather than hidden, so `.is-open` has
+   nothing to show or collapse — the caret is the only thing that reads state,
+   and it is scoped through `.facet` because `.is-open` is a bare word other
+   components use for their own things. */
+.facet { border-bottom: 1px solid var(--border-subtle); }
+
+.facet-h {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--transition-fast);
+}
+.facet-h:hover { color: var(--text-primary); }
+
+.facet-caret {
+  flex: 0 0 auto;
+  color: var(--text-disabled);
+  transition: transform var(--transition-fast);
+}
+.facet:not(.is-open) .facet-caret { transform: rotate(-90deg); }
+
+/* At the far end, so a column of groups has its counts in one vertical line. */
+.facet-n {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+}
+
+.facet-body { padding: 0 8px 11px; }
+
+.facet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The value row. `.facet-v-label` takes the slack and ellipses, which is what
+   puts the count hard against the right edge without a `justify-content` that
+   would also push a short label away from the caret above it. */
+.facet-v {
+  display: flex;
+  align-items: center;
   gap: 8px;
   width: 100%;
   padding: 4px 8px;
@@ -917,13 +980,59 @@ a.sb-seg:hover {
   text-align: left;
   transition: all var(--transition-fast);
 }
-.facet:hover { background: var(--surface-2); color: var(--text-primary); }
-.facet.on {
+.facet-v:hover { background: var(--surface-2); color: var(--text-primary); }
+.facet-v.on {
   background: var(--accent-glow);
   border-color: rgba(129, 140, 248, 0.4);
   color: var(--text-pure);
 }
-.facet .n { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.facet-v-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facet-more {
+  margin-top: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--accent-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.facet-more:hover { text-decoration: underline; }
+
+.facet-empty { padding: 3px 8px; font-size: 11.5px; color: var(--text-disabled); }
+
+.facet-num {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.facet-num .input-text { width: 58px; padding: 4px 7px; font-size: 12px; }
+
+.facet-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* Home lays these out as a plain div; the rail uses a `ul`, which brings its own
+   bullets and 40 px of indent along with it. */
+.facet-chips { list-style: none; margin: 0; padding: 0; }
+.facet-chips button.chip-channel { cursor: pointer; }
+.chip-channel.on {
+  color: var(--text-pure);
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
 
 /* ── Cards ── */
 .vios-card {
@@ -3494,6 +3603,426 @@ a.stat:hover {
   white-space: nowrap;
 }
 .header-ask:focus-within kbd { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SEARCH & LIBRARY — the results, in four shapes
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Results own their scroller and their own padding. `.split-main`'s frame is for
+   the panelled views (Data's table, Engine's job list); applying both leaves a
+   permanent 40 px of empty floor under the last row and stops the scrollbar
+   16 px short of the window edge, which reads as a broken layout rather than as
+   generous spacing. The four listed children are the ones that scroll
+   themselves — everything else in a split still gets the frame. */
+.split-main:has(> .vgrid, > .rows, > .strips, > .view-body, > .skel-grid) {
+  padding: 0;
+  gap: 0;
+}
+
+/* ── List mode: a reel is a header plus the lines that matched ──
+   The point of this mode is the *passages*, not the poster — so the thumbnail is
+   small and fixed, and everything the query actually hit gets the width. */
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 14px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rrow {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast);
+}
+.rrow:hover { border-color: var(--border-default); }
+
+.rrow-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 92px;
+  aspect-ratio: 9 / 16;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: block;
+}
+.rrow-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rrow-dur {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  background: rgba(6, 6, 8, 0.78);
+  border-radius: var(--radius-xs);
+}
+
+.rrow-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rrow-head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rrow-title {
+  font-size: 13.5px;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rrow-title:hover { color: var(--accent-primary); }
+/* The separators are generated rather than typed, so a row with no creator does
+   not open with a stray middot. */
+.rrow-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.rrow-meta span + span::before { content: '·'; margin-right: 7px; color: var(--text-disabled); }
+
+.rrow-spectrum { border-radius: 1.5px; }
+
+.rrow-passages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+
+/* Three columns rather than three inline spans: the timestamps and the text
+   start at the same x down the whole list, which is what makes it scannable.
+   72 px is `NARRATIVE` — the longest channel name — at 10 px mono plus its
+   chip padding, so no chip is ever clipped. */
+.passage {
+  display: grid;
+  grid-template-columns: 72px 44px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 5px;
+  border-radius: var(--radius-xs);
+  text-decoration: none;
+  transition: background var(--transition-fast);
+}
+.passage:hover { background: var(--surface-2); }
+.passage > .chip-channel { justify-self: start; overflow: hidden; }
+.passage-t {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: right;
+  color: var(--text-tertiary);
+}
+.passage-text {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rrow-more { padding: 3px 5px; font-size: 11px; color: var(--text-tertiary); }
+.rrow-more a { color: var(--accent-primary); text-decoration: none; }
+.rrow-more a:hover { text-decoration: underline; }
+
+/* The matched term, wherever it is shown. Amber rather than the accent, because
+   the accent already means "this is a link" everywhere else in the app. */
+.mk {
+  padding: 0 1px;
+  color: var(--text-pure);
+  background: rgba(251, 191, 36, 0.22);
+  border-radius: 2px;
+}
+
+.rows-footer,
+.strips .rows-footer {
+  padding: 14px 4px 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ── By creator: one lane each ── */
+.strips {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 14px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.strip { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.strip-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.strip-who {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.strip-who:hover { color: var(--accent-primary); }
+.strip-none { color: var(--text-disabled); font-style: italic; font-weight: 400; }
+.strip-n { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+
+/* ── Frame hits: one result per frame, not per reel ──
+   The bar is each frame's score rescaled against the others on screen, so it is
+   drawn as a plain length with no scale and no percentage — a number here would
+   be read as a confidence, which it is not. `.frames-note` says so in words. */
+.frames-note {
+  padding: 12px 14px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.frames-note em { font-style: normal; color: var(--text-secondary); }
+
+.frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  padding: 12px 14px 40px;
+}
+.frame-tile {
+  position: relative;
+  display: block;
+  aspect-ratio: 9 / 16;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
+}
+.frame-tile:hover { border-color: var(--accent-primary); transform: translateY(-1px); }
+.frame-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame-bar {
+  position: absolute;
+  left: 0;
+  bottom: 17px;
+  height: 3px;
+  background: var(--accent-primary);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+.frame-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  background: rgba(6, 6, 8, 0.8);
+  backdrop-filter: blur(3px);
+}
+.frame-t { color: var(--text-primary); }
+.frame-space { color: var(--text-disabled); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ── View-bar controls: density, and a plain select ── */
+.dens {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.dens input[type='range'] {
+  width: 84px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+.dens-n {
+  min-width: 15px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sel { padding: 6px 8px; font-size: 12px; max-width: 160px; cursor: pointer; }
+.sel option { background: var(--surface-2); color: var(--text-primary); }
+
+/* A button that is a link. Not the reverse of `.btn` — it is for the places
+   where the target is in-app state rather than a URL, so an `<a>` would be a
+   lie about what middle-click does. */
+.link {
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--accent-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.link:hover { text-decoration: underline; }
+
+.kv-link { color: var(--accent-primary); text-decoration: none; }
+.kv-link:hover { text-decoration: underline; }
+
+/* ── The detail rail: one reel's facts, beside the grid ── */
+.rail-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.rail-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rail-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-pure);
+  background: rgba(6, 6, 8, 0.25);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.rail-poster:hover .rail-play { opacity: 1; }
+
+.rail-title {
+  margin: 10px 0 8px;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: var(--text-pure);
+}
+
+/* `.card-chips` is a single 15 px line inside a card footer; here the chips are
+   the reel's whole evidence profile and there is room to wrap, so this undoes
+   both the clamp and the shrunken type the card imposes. */
+.rail-chips {
+  height: auto;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 10px 0;
+}
+.rail-chips .chip-channel { padding: 2px 6px; font-size: 10px; line-height: 1.5; }
+
+.rail-caption {
+  margin: 10px 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+.rail-moments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rail-moments a {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 5px 6px;
+  padding: 4px 5px;
+  border-radius: var(--radius-xs);
+  text-decoration: none;
+  transition: background var(--transition-fast);
+}
+.rail-moments a:hover { background: var(--surface-2); }
+.rail-moments .chip-channel { justify-self: start; }
+.rail-moments .passage-text {
+  grid-column: 1 / -1;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  font-size: 11.5px;
+}
+
+.rail-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+.rail-more:hover { text-decoration: underline; }
+
+.rail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+.rail-actions .btn { font-size: 11.5px; padding: 5px 9px; }
+/* The key is the label on this one, and a 40-character hash in a 232 px column
+   would push the row to three lines. */
+.rail-actions .btn-ghost {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.rail-said {
+  margin-top: 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--state-success);
+  background: rgba(52, 211, 153, 0.08);
+  border-radius: var(--radius-xs);
+}
+.rail-hint { margin-top: 10px; font-size: 11px; color: var(--text-disabled); line-height: 1.45; }
+
+/* ── The selection toolbar ──
+   Docked to the bottom of the results column rather than floating over it: the
+   last row of a grid is a legitimate thing to want to click while a selection is
+   open, and a floating bar covers exactly that. */
+.bulkbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border-default);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
+}
+.bulkbar .btn { font-size: 11.5px; padding: 5px 9px; }
+.bulk-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-pure);
+  padding-right: 4px;
+}
+.bulk-said { font-size: 11px; color: var(--state-success); }
+.bulk-note { font-size: 10.5px; color: var(--text-disabled); font-style: italic; }
 
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }

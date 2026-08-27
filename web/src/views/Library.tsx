@@ -269,7 +269,12 @@ export default function LibraryView({ route }: ViewProps) {
         )}
       </div>
 
-      {!focus && items.length > 0 && (
+      {/* Only the grid modes pass `onSelectToggle` down, so only they can honour
+          this. In list and filmstrip a ctrl-click falls through to the anchor and
+          opens the player — the hint was promising an affordance that mode does
+          not have, which is a worse bug than the missing feature because it
+          teaches you the app is broken. */}
+      {!focus && items.length > 0 && (mode === 'grid' || mode === 'contact') && (
         <div className="view-hint">ctrl-click a reel to open its details beside the grid</div>
       )}
     </div>
