@@ -231,100 +231,107 @@ export default function RoadmapView({ route }: ViewProps) {
 
       <div className="split">
         <aside className="rail rail-left" aria-label="Progress and goals">
-          {/* Progress — computed locally, so a tick moves the bar at once. */}
-          {total > 0 && (
-            <div className="rail-block">
-              <div className="rail-h">
-                progress
-                <span className="rail-n">{fmtPct(marked, total)}</span>
-              </div>
-              <div className="rm-bar" title={`${marked} of ${total} handled`}>
-                <span className="rm-bar-done" style={{ width: `${(done / total) * 100}%` }} />
-                <span className="rm-bar-skip" style={{ width: `${(skipped / total) * 100}%` }} />
-              </div>
-              <dl className="kv rm-kv">
-                <dt>watched</dt>
-                <dd>{fmtCount(done)}</dd>
-                <dt>skipped</dt>
-                <dd>{fmtCount(skipped)}</dd>
-                <dt>left</dt>
-                <dd>{fmtCount(total - marked)}</dd>
-                <dt>to watch</dt>
-                <dd>{fmtDur(remainingSec) || '0s'}</dd>
-              </dl>
-              {marked > 0 && (
-                <button className="btn-ghost rm-clear" onClick={clearAll} disabled={clearing}>
-                  <RotateCcw size={12} /> {clearing ? 'clearing…' : 'clear my progress'}
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* What to watch next: ready steps, the only question a curriculum
-              has to answer at any single moment. */}
-          {readySet.size > 0 && (
-            <div className="rail-block">
-              <div className="rail-h">
-                ready to watch
-                <span className="rail-n">{readySet.size}</span>
-              </div>
-              <div className="rm-ready">
-                {steps
-                  .filter((s) => readySet.has(s.id))
-                  .slice(0, 8)
-                  .map((s) => (
-                    <a
-                      key={s.id}
-                      className={`rm-ready-row${s.id === stepId ? ' is-active' : ''}`}
-                      href={href('roadmap', { params: paramsNow({ step: s.id }) })}
-                    >
-                      <span className="rm-ready-l">{s.label}</span>
-                      <span className="rm-ready-w">{fmtCount(s.videos)}</span>
-                    </a>
-                  ))}
-              </div>
-            </div>
-          )}
-
-          {/* Goals worth offering, before anything is typed. */}
-          {!goal && (
-            <div className="rail-block">
-              <div className="rail-h">or aim at one thing</div>
-              <div className="rail-note">
-                Plan over just the reels about a goal. Support, order and stages are all recomputed
-                inside that corner of the archive.
-              </div>
-              {goals.loading && goals.first ? (
-                <div className="rail-note">looking…</div>
-              ) : (
-                <div className="rm-goals">
-                  {(goals.data?.goals ?? []).map((g) => (
-                    <a
-                      key={g.label}
-                      className="rm-goal"
-                      href={href('roadmap', { params: { goal: g.label } })}
-                      title={`${plural(g.videos, 'reel')} ${g.videos === 1 ? 'touches' : 'touch'} ${g.label}`}
-                    >
-                      {g.label}
-                      <span className="rm-goal-n">{fmtCount(g.videos)}</span>
-                    </a>
-                  ))}
+          {/* `.rail-body` is the scroller. `.rail` itself is `overflow: hidden`,
+              so four blocks — progress, ready, goals, method — sitting directly
+              in the aside could not be scrolled to: the goals list alone is up
+              to sixteen rows and everything past the fold was unreachable. It
+              also supplies the 8px the blocks' own 4px padding assumes. */}
+          <div className="rail-body">
+            {/* Progress — computed locally, so a tick moves the bar at once. */}
+            {total > 0 && (
+              <div className="rail-block">
+                <div className="rail-h">
+                  progress
+                  <span className="rail-n">{fmtPct(marked, total)}</span>
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* How the order is inferred — stated once, plainly. */}
-          {total > 0 && (
-            <div className="rail-block">
-              <div className="rail-h">how the order is found</div>
-              <div className="rail-note">
-                No syllabus is written and no model is asked. If almost every reel about B also
-                covers A, but plenty about A never touch B, then A is the broader idea and comes
-                first. Each “after” below shows the two probabilities that decided it.
+                <div className="rm-bar" title={`${marked} of ${total} handled`}>
+                  <span className="rm-bar-done" style={{ width: `${(done / total) * 100}%` }} />
+                  <span className="rm-bar-skip" style={{ width: `${(skipped / total) * 100}%` }} />
+                </div>
+                <dl className="kv rm-kv">
+                  <dt>watched</dt>
+                  <dd>{fmtCount(done)}</dd>
+                  <dt>skipped</dt>
+                  <dd>{fmtCount(skipped)}</dd>
+                  <dt>left</dt>
+                  <dd>{fmtCount(total - marked)}</dd>
+                  <dt>to watch</dt>
+                  <dd>{fmtDur(remainingSec) || '0s'}</dd>
+                </dl>
+                {marked > 0 && (
+                  <button className="btn-ghost rm-clear" onClick={clearAll} disabled={clearing}>
+                    <RotateCcw size={12} /> {clearing ? 'clearing…' : 'clear my progress'}
+                  </button>
+                )}
               </div>
-            </div>
-          )}
+            )}
+
+            {/* What to watch next: ready steps, the only question a curriculum
+                has to answer at any single moment. */}
+            {readySet.size > 0 && (
+              <div className="rail-block">
+                <div className="rail-h">
+                  ready to watch
+                  <span className="rail-n">{readySet.size}</span>
+                </div>
+                <div className="rm-ready">
+                  {steps
+                    .filter((s) => readySet.has(s.id))
+                    .slice(0, 8)
+                    .map((s) => (
+                      <a
+                        key={s.id}
+                        className={`rm-ready-row${s.id === stepId ? ' is-active' : ''}`}
+                        href={href('roadmap', { params: paramsNow({ step: s.id }) })}
+                      >
+                        <span className="rm-ready-l">{s.label}</span>
+                        <span className="rm-ready-w">{fmtCount(s.videos)}</span>
+                      </a>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Goals worth offering, before anything is typed. */}
+            {!goal && (
+              <div className="rail-block">
+                <div className="rail-h">or aim at one thing</div>
+                <div className="rail-note">
+                  Plan over just the reels about a goal. Support, order and stages are all
+                  recomputed inside that corner of the archive.
+                </div>
+                {goals.loading && goals.first ? (
+                  <div className="rail-note">looking…</div>
+                ) : (
+                  <div className="rm-goals">
+                    {(goals.data?.goals ?? []).map((g) => (
+                      <a
+                        key={g.label}
+                        className="rm-goal"
+                        href={href('roadmap', { params: { goal: g.label } })}
+                        title={`${plural(g.videos, 'reel')} ${g.videos === 1 ? 'touches' : 'touch'} ${g.label}`}
+                      >
+                        {g.label}
+                        <span className="rm-goal-n">{fmtCount(g.videos)}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* How the order is inferred — stated once, plainly. */}
+            {total > 0 && (
+              <div className="rail-block">
+                <div className="rail-h">how the order is found</div>
+                <div className="rail-note">
+                  No syllabus is written and no model is asked. If almost every reel about B also
+                  covers A, but plenty about A never touch B, then A is the broader idea and comes
+                  first. Each “after” below shows the two probabilities that decided it.
+                </div>
+              </div>
+            )}
+          </div>
         </aside>
 
         <div className="split-main">

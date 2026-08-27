@@ -4528,6 +4528,576 @@ a.stat:hover {
    own smaller, quieter treatment rather than inherit this block. */
 .dtable-more .sql { padding: 3px 6px; color: var(--text-tertiary); white-space: nowrap; user-select: auto; }
 
+/* ══════════════════════════════════════════════════════════════════════
+   ROADMAP — the order to watch things in
+   Three columns: what you have done, the stages themselves, and one concept
+   in full. The view's whole claim is that the order was *derived*, not
+   authored, so the styling's job is to keep the evidence beside the verdict —
+   the two probabilities next to the "watch first", the reel count next to the
+   step — rather than presenting a bare ranked list and asking to be trusted.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Left rail: progress ── */
+/* A two-segment bar rather than one. Watched and skipped both mean "handled"
+   and both count toward the percentage, but they are not the same act: one is
+   time spent, the other is time claimed back. Indigo is the colour of your own
+   choices everywhere else in the app; skipped is the disabled grey, present but
+   not earned. The width transition is what makes ticking a step feel like it
+   moved something. */
+.rm-bar {
+  display: flex;
+  height: 6px;
+  margin-bottom: 10px;
+  background: var(--surface-3);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.rm-bar-done,
+.rm-bar-skip {
+  display: block;
+  height: 100%;
+  flex: 0 0 auto;
+  min-width: 0;
+  transition: width var(--transition-normal);
+}
+.rm-bar-done { background: var(--accent-primary); }
+.rm-bar-skip { background: var(--text-disabled); }
+
+/* `.kv`'s own `minmax(96px, auto)` first column is sized for a panel in the
+   main column, and it leaves a four-character count stranded in the middle of
+   a 216 px rail. Label left, number hard right, so the four figures form a
+   column you can read down. */
+.rm-kv {
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  font-size: 11.5px;
+}
+.rm-kv dd { text-align: right; }
+
+.rm-clear { margin-top: 10px; }
+
+/* ── Left rail: what is watchable now ── */
+.rm-ready {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rm-ready-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  transition: all var(--transition-fast);
+}
+.rm-ready-row:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+/* `.is-active` appears seven times in this stylesheet and every one of them is
+   scoped to a different parent, so this row — which sets the same token —
+   inherited nothing and the rail gave no sign of which step was open. */
+.rm-ready-row.is-active {
+  background: var(--accent-glow);
+  border-color: rgba(129, 140, 248, 0.45);
+  color: var(--text-pure);
+}
+.rm-ready-l {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-ready-w {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ── Left rail: goals ── */
+.rm-goals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rm-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+.rm-goal:hover {
+  background: var(--surface-2);
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+.rm-goal-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ── The stages ── */
+.rm-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* A card per stage, because the levels are the one piece of structure the
+   algorithm actually produced: everything inside a card can be watched in any
+   order, and crossing a card boundary is the part that matters. `overflow:
+   hidden` is what lets the header's fill reach the rounded corners. */
+.rm-stage {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.rm-stage-h {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rm-stage-lv {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+}
+.rm-stage-t {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rm-stage-t strong {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.rm-stage-t .dim { line-height: 1.45; }
+.rm-stage-meta {
+  flex-shrink: 0;
+  padding-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── One step ── */
+.rm-steps { display: flex; flex-direction: column; }
+/* Flex, not grid. The "next" badge is conditional, and in a five-column grid
+   its absence would slide the skip and open buttons one column left on every
+   row that is not next — the two controls you reach for by position. */
+.rm-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  transition: background var(--transition-fast);
+}
+.rm-step + .rm-step { border-top: 1px solid var(--border-subtle); }
+.rm-step:hover { background: var(--surface-2); }
+
+/* The three square controls share one geometry so the right edge of every row
+   lines up whether or not the row carries a badge. */
+.rm-check,
+.rm-skip,
+.rm-open {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.rm-check { border-radius: var(--radius-full); }
+.rm-check:hover {
+  color: var(--accent-primary);
+  background: var(--surface-3);
+}
+.rm-skip:hover,
+.rm-open:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+/* The button already carries `aria-pressed`, so the latched look reads off the
+   same attribute a screen reader does instead of a second source of truth. */
+.rm-skip[aria-pressed='true'] {
+  color: var(--text-secondary);
+  background: var(--surface-3);
+}
+
+.rm-step-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
+}
+.rm-step-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* `.dim` hardcodes 12 px, which would make the "unlocks 4" span the largest
+   text in a line of 11 px figures. */
+.rm-step-meta .dim { font-size: inherit; }
+/* A separator between the figures, but not around the kind tag — it has its
+   own border and a middot on either side of a chip is a boundary drawn twice. */
+.rm-step-meta > span + span::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--text-disabled);
+}
+.rm-step-meta > .rm-kind + span::before { content: none; }
+.rm-kind {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+}
+.rm-step-after {
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rm-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-primary);
+  background: var(--accent-glow);
+  border: 1px solid rgba(129, 140, 248, 0.45);
+  border-radius: var(--radius-full);
+}
+
+/* ── Step states ── */
+/* An inset shadow rather than `border-left`, so a ready row is not 2 px
+   narrower than the one above it. `:not(.is-done):not(.is-skip)` because the
+   markup keeps `is-ready` on a row after you tick it — the graph still says
+   nothing blocks it — and a watched step advertising itself as next is the one
+   thing this rail exists to stop. */
+.rm-step.is-ready:not(.is-done):not(.is-skip) {
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+/* `.is-selected` is defined once in this stylesheet, as `.vios-card.is-selected`,
+   so the open step looked identical to every other row. */
+.rm-step.is-selected {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+/* Done changes the label and the tick only, so it composes with `is-selected`
+   above instead of fighting it for the background. */
+.rm-step.is-done .rm-step-label {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-disabled);
+}
+.rm-step.is-done .rm-check { color: var(--state-success); }
+.rm-step.is-skip { opacity: 0.55; }
+
+.rm-foot {
+  padding-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── The inspector ── */
+/* Wider than the 232 px default, and set on the rail itself rather than on the
+   view the way `.eng-view` and `.cap-view` do it, because only this rail needs
+   the room: it carries passage prose at 160 characters a card, while the left
+   rail holds labels and counts. */
+.rm-ins { --rail-w: 320px; }
+.rm-ins-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rm-ins-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rm-ins-t strong {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+/* `.rail` is `overflow: hidden` and this is the scroller under the fixed head —
+   the same division of labour as `.rail-body`, which this cannot reuse because
+   the head sits outside it. */
+.rm-ins-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 10px 20px;
+}
+/* The error and empty branches render as a direct child of the rail, outside
+   `.rm-ins-body`, so without this they get no scroller of their own and a long
+   server message is clipped by `.rail`'s `overflow: hidden`. */
+.rm-ins > .state-box {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 40px 16px;
+}
+
+.rm-ins-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.rm-ins-kv {
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  font-size: 11.5px;
+}
+.rm-ins-kv dt { line-height: 1.35; }
+.rm-ins-kv dd { text-align: right; }
+.rm-ins-kv dd .dim { font-size: inherit; }
+
+.rm-ins-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rm-ins-note {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.rm-unlocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rm-unlock {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px 3px 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.rm-unlock:hover {
+  background: var(--surface-2);
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+.rm-unlock svg { color: var(--text-tertiary); }
+
+.rm-ins-graph {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--accent-primary);
+  text-decoration: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+.rm-ins-graph:hover {
+  background: var(--accent-glow);
+  border-color: rgba(129, 140, 248, 0.45);
+}
+
+/* A dashed box, not bare text. "No watchable passage" is a real finding about
+   the archive — the concept was mined from a column no reel pins to a second —
+   and it should look like an answer rather than a section that failed to load. */
+.rm-ins-none {
+  padding: 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  background: var(--surface-1);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Passages ── */
+.rm-passages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rm-passages-note {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.rm-passage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.rm-passage:hover {
+  background: var(--surface-2);
+  border-color: var(--border-active);
+}
+.rm-passage-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rm-passage-t {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.rm-passage-play {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  transition: color var(--transition-fast);
+}
+.rm-passage:hover .rm-passage-play { color: var(--accent-primary); }
+/* Which reel, then what it says. The title is the weaker of the two: these
+   moments come from different videos, so the reel is context and the sentence
+   is the reason this row is on screen. */
+.rm-passage-title {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.rm-passage-text {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* ── A prerequisite, with the two numbers that decided it ── */
+.rm-prereq {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.rm-prereq:hover {
+  background: var(--surface-2);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+.rm-prereq svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.rm-prereq-l {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-prereq-n {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }
 :focus-visible {
