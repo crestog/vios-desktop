@@ -35,7 +35,7 @@ import { go } from '../lib/router';
 import { LIBRARY_SORTS, getFacets, getLibrary } from '../lib/api';
 import { store, useDensity, useGridMode, type GridMode } from '../lib/store';
 import { useDebounced, useFetch } from '../lib/useFetch';
-import { fmtCount } from '../lib/format';
+import { fmtCount, plural } from '../lib/format';
 import { channelTally } from '../lib/channels';
 import Results from '../components/Results';
 import FacetRail from '../components/FacetRail';
@@ -130,7 +130,7 @@ export default function LibraryView({ route }: ViewProps) {
           onChange={(e) => setText(e.target.value)}
           placeholder={
             archiveTotal
-              ? `filter all ${fmtCount(archiveTotal)} reels — title, creator, caption or contents`
+              ? `filter all ${plural(archiveTotal, 'reel')} — title, creator, caption or contents`
               : 'filter the whole archive — title, creator, caption or contents'
           }
           spellCheck={false}

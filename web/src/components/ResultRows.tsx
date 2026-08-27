@@ -17,7 +17,7 @@ import { useCallback, useRef } from 'react';
 import type { Moment, VideoItem } from '../types';
 import { framePosterUrl, posterUrl } from '../lib/api';
 import { channelOf, chipClass } from '../lib/channels';
-import { clip, fmtCompact, fmtDur, fmtT } from '../lib/format';
+import { clip, fmtCompact, fmtDur, fmtT, plural } from '../lib/format';
 import { href } from '../lib/router';
 import Mark from './Mark';
 import Spectrum from './Spectrum';
@@ -160,7 +160,9 @@ export default function ResultRows({
                   </li>
                 )}
                 {!all.length && typeof v.moment_count === 'number' && (
-                  <li className="rrow-more">{fmtCompact(v.moment_count)} claims on record</li>
+                  <li className="rrow-more">
+                    {plural(v.moment_count, 'claim', 'claims', fmtCompact)} on record
+                  </li>
                 )}
               </ul>
             </div>

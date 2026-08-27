@@ -23,7 +23,7 @@
 import { useMemo } from 'react';
 import { frameUrl, type VisualHit } from '../lib/api';
 import { href } from '../lib/router';
-import { fmtCount, fmtT } from '../lib/format';
+import { fmtT, plural } from '../lib/format';
 
 export interface FrameHitsProps {
   hits: VisualHit[];
@@ -81,7 +81,7 @@ export default function FrameHits({ hits, reason, error, first, loading, q }: Fr
   return (
     <div className="view-body">
       <div className="frames-note">
-        {fmtCount(hits.length)} frames across {fmtCount(reels)} reels · the bar is each frame's
+        {plural(hits.length, 'frame')} across {plural(reels, 'reel')} · the bar is each frame's
         strength <em>relative to the others here</em>, not a confidence
       </div>
       <div className="frames">

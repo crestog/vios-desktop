@@ -58,7 +58,7 @@ import {
   saveCredentials,
 } from '../lib/api';
 import { useFetch, type FetchState } from '../lib/useFetch';
-import { clip, fmtAgo, fmtBytes, fmtCount, fmtDate } from '../lib/format';
+import { clip, fmtAgo, fmtBytes, fmtCount, fmtDate, plural } from '../lib/format';
 import type {
   BundleRow,
   BundlesResponse,
@@ -284,7 +284,7 @@ function Credentials({ state }: { state: FetchState<StoredCredentials> }) {
         kind: 'ok',
         text:
           `Saved ${res.changed.join(', ')} to ${res.path}. ` +
-          `${fmtCount(res.exported.length)} variable(s) set in this process too, so ` +
+          `${plural(res.exported.length, 'variable')} set in this process too, so ` +
           `it is live now — nothing to restart.`,
       });
       state.reload();
@@ -745,7 +745,7 @@ function Restore({ state }: { state: FetchState<RestoreStatus> }) {
 
       {st.log.length > 0 && (
         <details className="adm-log">
-          <summary>Log · {st.log.length} line(s)</summary>
+          <summary>Log · {plural(st.log.length, 'line')}</summary>
           <pre>{st.log.slice(-40).join('\n')}</pre>
         </details>
       )}
@@ -789,7 +789,7 @@ function PlanPanel({ plan, done }: { plan: RestorePlan; done: boolean }) {
           <dd>{plan.schema ?? 'not declared'}</dd>
           <dt>Files</dt>
           <dd>
-            {fmtCount(plan.files.length)} file(s), {fmtCount(parts)} part(s)
+            {plural(plan.files.length, 'file')}, {plural(parts, 'part')}
           </dd>
           <dt>Download</dt>
           <dd>{plan.download_mb ? `${plan.download_mb.toFixed(1)} MB` : 'already local'}</dd>
@@ -966,7 +966,7 @@ function Sources({ state }: { state: FetchState<BundlesResponse> }) {
       <div className="section-h">
         <Table2 size={13} className="dim" />
         <h2>Sources</h2>
-        <span className="count">{fmtCount(d.bundles.length)} imported file(s)</span>
+        <span className="count">{plural(d.bundles.length, 'imported file')}</span>
         <span className="spacer" />
         <div className="segmented">
           {FILTERS.map((f) => (
@@ -1036,7 +1036,9 @@ function Sources({ state }: { state: FetchState<BundlesResponse> }) {
       <div className="section-h adm-sec2">
         <Layers size={13} className="dim" />
         <h2>The text index</h2>
-        <span className="count">{fmtCount(d.sources.length)} column(s) reflection chose</span>
+        <span className="count">
+          {plural(d.sources.length, 'column')} reflection chose
+        </span>
       </div>
       <p className="view-hint">
         Reflection reads the schema and decides what search reads, so a table added upstream becomes

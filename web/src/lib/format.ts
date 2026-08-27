@@ -54,18 +54,27 @@ export function fmtCount(n: number | null | undefined): string {
 }
 
 /**
- * `count(1, 'reel')` → `"1 reel"`, `count(0, 'reel')` → `"0 reels"`.
+ * `plural(1, 'reel')` → `"1 reel"`, `plural(0, 'reel')` → `"0 reels"`.
  *
- * Small, but this is the fourth place the same defect appeared — "1 reels",
- * "1 claims", "1 reels are queued" — and each one was fixed with its own inline
- * ternary. A number and its noun always travel together, so they format
- * together.
+ * Small, but the same defect appeared at twenty-two call sites — "1 reels",
+ * "1 claims", "1 shots", "1 reels touch this" — and the first few were each
+ * fixed with their own inline ternary. A number and its noun always travel
+ * together, so they format together.
  *
  * An unknown count keeps the plural: "— reels" reads as a value not yet
  * arrived, where "— reel" reads as a bug.
+ *
+ * `fmt` is for the badges, where four digits will not fit and `fmtCompact`
+ * already had the job. Irregular nouns pass `many` — there are none in this app
+ * yet, but "1 index / 2 indices" is one component name away.
  */
-export function count(n: number | null | undefined, one: string, many?: string): string {
-  return `${fmtCount(n)} ${n === 1 ? one : many ?? `${one}s`}`;
+export function plural(
+  n: number | null | undefined,
+  one: string,
+  many = `${one}s`,
+  fmt: (v: number | null | undefined) => string = fmtCount
+): string {
+  return `${fmt(n)} ${n === 1 ? one : many}`;
 }
 
 /** Compact, for a badge where four digits will not fit: `12.4k`. */

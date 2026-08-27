@@ -60,7 +60,7 @@ import {
 } from '../lib/api';
 import { useDebounced, useFetch } from '../lib/useFetch';
 import { channelOf, chipClass } from '../lib/channels';
-import { clip, fmtCount, fmtDur, fmtPct, fmtT } from '../lib/format';
+import { clip, fmtCount, fmtDur, fmtPct, fmtT, plural } from '../lib/format';
 
 // The server's own defaults. Kept here so the sliders read the same numbers the
 // plan was built with, and so a value equal to the default drops out of the URL
@@ -303,7 +303,7 @@ export default function RoadmapView({ route }: ViewProps) {
                       key={g.label}
                       className="rm-goal"
                       href={href('roadmap', { params: { goal: g.label } })}
-                      title={`${g.videos} reels touch ${g.label}`}
+                      title={`${plural(g.videos, 'reel')} ${g.videos === 1 ? 'touches' : 'touch'} ${g.label}`}
                     >
                       {g.label}
                       <span className="rm-goal-n">{fmtCount(g.videos)}</span>
@@ -393,7 +393,7 @@ export default function RoadmapView({ route }: ViewProps) {
 
               <div className="rm-foot dim">
                 Built in {Math.round(data.built_ms)} ms{data.cached ? ' · from cache' : ''} · reads{' '}
-                {fmtCount(data.stats.scope_videos)} reels
+                {plural(data.stats.scope_videos, 'reel')}
               </div>
             </>
           )}
@@ -454,7 +454,7 @@ function StepRow({
         <span className="rm-step-label">{step.label}</span>
         <span className="rm-step-meta">
           <span className="rm-kind">{step.kind === 'hashtag' ? '#tag' : step.group || 'concept'}</span>
-          <span title="reels this concept appears in">{fmtCount(step.videos)} reels</span>
+          <span title="reels this concept appears in">{plural(step.videos, 'reel')}</span>
           {step.share > 0 && (
             <span title="share of the reels in scope">{fmtPct(step.share, 1)}</span>
           )}

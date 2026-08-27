@@ -69,7 +69,7 @@ import { getDeconstruct, getPatterns, getScriptDraft } from '../lib/api';
 import { useDebounced, useFetch } from '../lib/useFetch';
 import type { FetchState } from '../lib/useFetch';
 import { CHANNEL_MEANING, channelOf, channelVar, chipClass } from '../lib/channels';
-import { clip, fmtCount, fmtDur, fmtPct, fmtT } from '../lib/format';
+import { clip, fmtCount, fmtDur, fmtPct, fmtT, plural } from '../lib/format';
 
 type Mode = 'patterns' | 'reel' | 'script';
 
@@ -202,8 +202,8 @@ export default function StudioView({ route }: ViewProps) {
         )}
         {mode === 'reel' && one.data && (
           <span className="dim">
-            {fmtDur(one.data.duration)} · {fmtCount(one.data.moments)} moments ·{' '}
-            {one.data.pacing.shots ? `${fmtCount(one.data.pacing.shots)} shots` : 'no shots detected'}
+            {fmtDur(one.data.duration)} · {plural(one.data.moments, 'moment')} ·{' '}
+            {one.data.pacing.shots ? plural(one.data.pacing.shots, 'shot') : 'no shots detected'}
           </span>
         )}
 
@@ -598,7 +598,7 @@ function ReelPicker({
               href={href('studio', { params: paramsNow({ mode: 'reel', key: r.video_key }) })}
               title={`${r.title}${r.creator ? ` — ${r.creator}` : ''}\n${n(r.cuts_per_min, 1)} cuts/min · ${pct(
                 r.speech_share
-              )} talking · ${fmtCount(r.moments)} moments`}
+              )} talking · ${plural(r.moments, 'moment')}`}
             >
               <span className="tbl-n">{r.title || r.video_key}</span>
               <span className="tbl-r">{fmtDur(r.duration)}</span>
@@ -690,7 +690,7 @@ function PatternsPane({
             <section>
               <div className="section-h">
                 <h2>Shape</h2>
-                <span className="count">{fmtCount(d.reels)} reels in scope</span>
+                <span className="count">{plural(d.reels, 'reel')} in scope</span>
               </div>
               <div className="stu-dists">
                 {MEASURES.map((m) => (
@@ -762,7 +762,7 @@ function HookAgg({ hook, window: win }: { hook: PatternsResponse['hook']; window
     <section>
       <div className="section-h">
         <h2>The first {n(win, 1)}s</h2>
-        <span className="count">{ofN(of)} reels with evidence there</span>
+        <span className="count">of {plural(of, 'reel')} with evidence there</span>
       </div>
 
       <div className="stu-hook">
@@ -1138,7 +1138,7 @@ function PacingPanel({ d }: { d: DeconstructResponse }) {
       <div className="section-h">
         <h2>Cutting</h2>
         <span className="count">
-          {p.shots ? `${fmtCount(p.shots)} shots · ${fmtCount(p.cuts)} cuts` : 'no shots detected'}
+          {p.shots ? `${plural(p.shots, 'shot')} · ${plural(p.cuts, 'cut')}` : 'no shots detected'}
         </span>
       </div>
       {!p.shots ? (

@@ -82,7 +82,9 @@ import {
   type CaptureConfigFields,
 } from '../lib/api';
 import { useFetch, type FetchState } from '../lib/useFetch';
-import { clip, fmtAgo, fmtBytes, fmtCount, fmtDate, fmtDur, fmtIn, fmtPct } from '../lib/format';
+import {
+  clip, fmtAgo, fmtBytes, fmtCount, fmtDate, fmtDur, fmtIn, fmtPct, plural,
+} from '../lib/format';
 import type {
   BackfillStatus,
   CaptureCollection,
@@ -835,7 +837,7 @@ function PacerPanel({ status }: { status?: CaptureStatus | null }) {
         {p.breaks && (
           <>
             <dt>next break</dt>
-            <dd>in {fmtCount(p.until_break)} reels</dd>
+            <dd>in {plural(p.until_break, 'reel')}</dd>
           </>
         )}
         <dt>quiet hours</dt>
@@ -1429,7 +1431,7 @@ function BackfillCard({
         <span className="count">
           {c.error
             ? c.error
-            : `${fmtCount(have)} of ${fmtCount(all)} videos ready${
+            : `${fmtCount(have)} of ${plural(all, 'video')} ready${
                 left ? ` · ${fmtCount(left)} without` : ''
               }`}
         </span>

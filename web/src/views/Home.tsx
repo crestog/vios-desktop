@@ -21,7 +21,7 @@ import { go, href } from '../lib/router';
 import { getFacets, getGraph, getLibrary, getStatus, posterUrl } from '../lib/api';
 import { useEngine, useMirror } from '../lib/store';
 import { useFetch } from '../lib/useFetch';
-import { fmtBytes, fmtCompact, fmtCount, fmtDur, fmtPct } from '../lib/format';
+import { fmtBytes, fmtCompact, fmtCount, fmtDur, fmtPct, plural } from '../lib/format';
 import { CHANNEL_MEANING, channelTally, channelVar, chipClass } from '../lib/channels';
 import { nodeCss, nodeNote, nodeTypeLabel } from '../lib/kinds';
 import Card from '../components/Card';
@@ -185,7 +185,7 @@ export default function HomeView(_props: ViewProps) {
                     className="chan-seg"
                     style={{ flexGrow: count, background: channelVar(channel) }}
                     href={href('search', { params: { q: '*', source: channel } })}
-                    title={`${channel}: ${fmtCount(count)} claims — ${CHANNEL_MEANING[channel]} (${fmtPct(
+                    title={`${channel}: ${plural(count, 'claim')} — ${CHANNEL_MEANING[channel]} (${fmtPct(
                       count,
                       total
                     )})`}
@@ -264,9 +264,12 @@ export default function HomeView(_props: ViewProps) {
                     opacity: 0.5 + c.rel * 0.5,
                     color: nodeCss(c),
                   }}
-                  title={`${nodeTypeLabel(c)} — ${nodeNote(c)} · connects ${fmtCompact(
-                    c.weight
-                  )} claims`}
+                  title={`${nodeTypeLabel(c)} — ${nodeNote(c)} · connects ${plural(
+                    c.weight,
+                    'claim',
+                    'claims',
+                    fmtCompact
+                  )}`}
                 >
                   {c.label}
                 </a>
@@ -363,7 +366,7 @@ export default function HomeView(_props: ViewProps) {
 
         <div className="home-foot">
           <span>
-            {s?.videos ? `${fmtCount(s.videos)} reels · ` : ''}
+            {s?.videos ? `${plural(s.videos, 'reel')} · ` : ''}
             {s?.seconds ? `${fmtDur(s.seconds)} of footage · ` : ''}
             all of it on this machine
           </span>

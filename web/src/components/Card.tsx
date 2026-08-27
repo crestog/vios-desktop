@@ -35,7 +35,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VideoItem } from '../types';
 import { clipUrl, framePosterUrl, posterUrl } from '../lib/api';
 import { channelsIn, chipClass } from '../lib/channels';
-import { fmtCompact, fmtDur, fmtT } from '../lib/format';
+import { fmtCompact, fmtDur, fmtT, plural } from '../lib/format';
 import { href } from '../lib/router';
 import Spectrum from './Spectrum';
 
@@ -211,7 +211,9 @@ export default function Card({
               <span className="card-likes">♥ {fmtCompact(video.likes)}</span>
             )}
             {typeof video.moment_count === 'number' && video.moment_count > 0 && (
-              <span className="card-moments">{fmtCompact(video.moment_count)} claims</span>
+              <span className="card-moments">
+                {plural(video.moment_count, 'claim', 'claims', fmtCompact)}
+              </span>
             )}
           </div>
           {channels.length > 0 && (

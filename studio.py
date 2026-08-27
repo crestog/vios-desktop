@@ -205,6 +205,18 @@ def _grams(text: str, nmax: int = NGRAM_MAX) -> list[str]:
 # shown to a person, because one 90-minute file in a folder of 30-second reels
 # moves a mean and does not move a median.
 
+def _n(count: int, one: str, many: str = "") -> str:
+    """`_n(1, "reel")` → "1 reel". The count and its noun, formatted together.
+
+    `reel(s)` is unremarkable in a log line and wrong on screen, and every
+    string in this module that used it is a `note` or a `why` that the interface
+    renders verbatim — so "1 reel(s) matching “hook”" was visible in the
+    product, twelve times over. Five of those also needed the verb, which no
+    helper can do for you: "1 reel matches", not "1 reel match".
+    """
+    return f"{count} {one if count == 1 else many or one + 's'}"
+
+
 def _pct(xs: list[float], p: float) -> float:
     """Linear-interpolated percentile on a sorted copy. `p` in 0..1.
 
@@ -908,12 +920,14 @@ def _scope(conn: sqlite3.Connection, goal: str = "", creator: str = "",
             if len(keys) >= 3:
                 more = int(found.get("total") or 0) > len(keys)
                 mode = "goal"
-                note = (f"{len(keys)} reel(s) matching “{goal}”"
+                note = (f"{_n(len(keys), 'reel')} matching “{goal}”"
                         + (f" — the strongest {SCOPE_CAP} of more" if more else ""))
             else:
-                note = (f"only {len(keys)} reel(s) match “{goal}” — reading the "
-                        f"whole archive instead, because a distribution over "
-                        f"{len(keys)} reel(s) would not mean anything")
+                note = (f"only {_n(len(keys), 'reel')} "
+                        f"{'matches' if len(keys) == 1 else 'match'} “{goal}” — "
+                        f"reading the whole archive instead, because a "
+                        f"distribution over {_n(len(keys), 'reel')} would not "
+                        f"mean anything")
                 keys, weights = [], {}
         except Exception as e:                                    # noqa: BLE001
             log(f"studio: scope search failed — {type(e).__name__}: {e}", "WARN")
@@ -937,10 +951,11 @@ def _scope(conn: sqlite3.Connection, goal: str = "", creator: str = "",
                 mode = "filter"
                 which = " and ".join(filter(None, [f"creator “{creator}”" if creator else "",
                                                    f"category “{category}”" if category else ""]))
-                note = f"{len(keys)} reel(s) with {which}"
+                note = f"{_n(len(keys), 'reel')} with {which}"
             else:
-                note = (f"all {len(keys)} indexed reel(s)" if len(keys) >= total
-                        else f"the {len(keys)} most-indexed of {total} reel(s)")
+                note = (f"all {_n(len(keys), 'indexed reel')}" if len(keys) >= total
+                        else f"the {len(keys)} most-indexed of "
+                             f"{_n(total, 'reel')}")
 
     return {"mode": mode, "goal": goal, "creator": creator,
             "category": category, "keys": keys, "weights": weights,
@@ -1054,8 +1069,9 @@ def _tertile_bands(xs: list[float], names: tuple[str, str, str]) -> dict:
     distinct cut points the bands collapse and the caller is told, rather than
     being handed three buckets two of which are empty."""
     if len(xs) < 6:
-        return {"ok": False, "why": f"only {len(xs)} reel(s) carry this measure — "
-                                   f"six is the floor for thirds",
+        return {"ok": False, "why": f"only {_n(len(xs), 'reel')} "
+                                   f"{'carries' if len(xs) == 1 else 'carry'} this "
+                                   f"measure — six is the floor for thirds",
                 "names": list(names), "edges": []}
     lo, hi = _pct(xs, 1 / 3), _pct(xs, 2 / 3)
     if not (lo < hi):
@@ -1164,12 +1180,16 @@ def patterns(conn: sqlite3.Connection, goal: str = "", creator: str = "",
             notes.append("Nothing is indexed in this scope yet.")
         no_shots = sum(1 for r in rows if not r["shots"])
         if rows and no_shots:
-            notes.append(f"{no_shots} of {len(rows)} reel(s) have no detected "
-                         f"shots, so they are absent from every pacing number "
-                         f"rather than counted as having none.")
+            notes.append(f"{no_shots} of {_n(len(rows), 'reel')} "
+                         f"{'has' if no_shots == 1 else 'have'} no detected shots, "
+                         f"so {'it is' if no_shots == 1 else 'they are'} absent from "
+                         f"every pacing number rather than counted as having "
+                         f"none.")
         no_ms = sum(1 for r in rows if not r["moments"])
         if rows and no_ms:
-            notes.append(f"{no_ms} of {len(rows)} reel(s) carry no evidence yet.")
+            notes.append(f"{no_ms} of {_n(len(rows), 'reel')} "
+                         f"{'carries' if no_ms == 1 else 'carry'} no evidence "
+                         f"yet.")
 
         # Channel presence: how often a channel appears at all, and how much of
         # the runtime it holds when it does. Both, because `style` is present in
@@ -1294,7 +1314,7 @@ def _outline(beats: list[dict], target: float, reels: int) -> dict:
             points.append("no text evidence lands in this beat across the scope")
         lines.append({"name": b["name"], "headline": " · ".join(bits),
                       "points": points})
-    head = (f"Measured from {reels} reel(s); target runtime {_fmt_s(target)}."
+    head = (f"Measured from {_n(reels, 'reel')}; target runtime {_fmt_s(target)}."
             if reels else "Nothing measurable in this scope.")
     text = head + "\n\n" + "\n".join(
         f"{ln['name']} — {ln['headline']}\n" + "\n".join(f"  · {p}" for p in ln["points"])
@@ -1404,13 +1424,15 @@ def script_draft(conn: sqlite3.Connection, goal: str = "", creator: str = "",
             notes.append("No reel in this scope has both a runtime and any "
                          "evidence, so there is nothing to draft from.")
         elif len(usable) < 8:
-            notes.append(f"Only {len(usable)} reel(s) back this draft. The "
-                         f"medians are real but they are medians of "
+            notes.append(f"Only {_n(len(usable), 'reel')} "
+                         f"{'backs' if len(usable) == 1 else 'back'} this draft. "
+                         f"The medians are real but they are medians of "
                          f"{len(usable)} — read them as a sketch.")
         skipped = len(loaded) - len(usable)
         if skipped > 0:
-            notes.append(f"{skipped} reel(s) in the scope were skipped for "
-                         f"having no runtime or no evidence.")
+            notes.append(f"{_n(skipped, 'reel')} in the scope "
+                         f"{'was' if skipped == 1 else 'were'} skipped for having "
+                         f"no runtime or no evidence.")
 
         return {
             "ok": True,

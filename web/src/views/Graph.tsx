@@ -62,7 +62,7 @@ import {
 } from '../lib/api';
 import { store } from '../lib/store';
 import { useDebounced, useFetch } from '../lib/useFetch';
-import { clip, fmtCompact, fmtCount, fmtDur } from '../lib/format';
+import { clip, fmtCompact, fmtCount, fmtDur, plural } from '../lib/format';
 import { nodeCss, nodeNote, nodeProp, nodeTypeLabel } from '../lib/kinds';
 import GraphCanvas from '../components/GraphCanvas';
 
@@ -407,7 +407,7 @@ export default function GraphView({ route }: ViewProps) {
             <div className="rail-block">
               <div className="rail-h">from your selection</div>
               <div className="rail-note">
-                Built from {fmtCount(keyList.length)} reels you picked, and what they have in
+                Built from {plural(keyList.length, 'reel')} you picked, and what they have in
                 common. <a href={href('graph')}>show the whole archive instead</a>
               </div>
             </div>
@@ -821,7 +821,7 @@ function Inspector({
                   <span className="vrow-sub">
                     {v.creator || 'unattributed'}
                     {v.duration ? ` · ${fmtDur(v.duration)}` : ''}
-                    {v.moment_count ? ` · ${fmtCount(v.moment_count)} claims` : ''}
+                    {v.moment_count ? ` · ${plural(v.moment_count, 'claim')}` : ''}
                   </span>
                 </span>
               </a>
@@ -890,7 +890,7 @@ function Rows({ set, compact }: { set: RecordSet; compact?: boolean }) {
         <a className="kv-link" href={href('data', { params: { table: set.table } })}>
           {set.table}
         </a>
-        <span className="rset-n">{fmtCount(set.rows.length)} row(s)</span>
+        <span className="rset-n">{plural(set.rows.length, 'row')}</span>
       </div>
       {rows.map((row, i) => {
         const filled = Object.entries(row).filter(
@@ -916,7 +916,7 @@ function Rows({ set, compact }: { set: RecordSet; compact?: boolean }) {
             {empties > 0 && (
               <>
                 <dt className="dim">empty</dt>
-                <dd className="dim">{empties} column(s) with nothing in them</dd>
+                <dd className="dim">{plural(empties, 'column')} with nothing in them</dd>
               </>
             )}
           </dl>

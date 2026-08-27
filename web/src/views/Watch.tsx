@@ -68,7 +68,7 @@ import {
   spriteUrl,
 } from '../lib/api';
 import { useFetch } from '../lib/useFetch';
-import { fmtBytes, fmtCompact, fmtDur, fmtT, clip } from '../lib/format';
+import { fmtBytes, fmtCompact, fmtDur, fmtT, clip, plural } from '../lib/format';
 import { ALL_CHANNELS, channelOf, chipClass, type ChannelName } from '../lib/channels';
 import { store } from '../lib/store';
 import Spectrum from '../components/Spectrum';
@@ -395,7 +395,7 @@ export default function WatchView({ route }: ViewProps) {
             <div className="rail-head">
               <span className="view-title">Evidence</span>
               <span className="spacer" />
-              <span className="view-sub">{fmtCompact(moments.length)} claims</span>
+              <span className="view-sub">{plural(moments.length, 'claim', 'claims', fmtCompact)}</span>
             </div>
 
             {tally.length > 0 && (
@@ -411,7 +411,7 @@ export default function WatchView({ route }: ViewProps) {
                     key={channel}
                     className={`${chipClass(channel)}${only === channel ? ' on' : ''}`}
                     onClick={() => setOnly(only === channel ? null : channel)}
-                    title={`${count} claims from ${channel}`}
+                    title={`${plural(count, 'claim')} from ${channel}`}
                   >
                     {channel} <span className="facet-v-n">{count}</span>
                   </button>

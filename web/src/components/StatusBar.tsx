@@ -14,7 +14,7 @@
  */
 
 import { useDisk, useEngine, useHost, useMirror, useOffline } from '../lib/store';
-import { count, fmtBytes, fmtCount, fmtPct, GB } from '../lib/format';
+import { fmtBytes, fmtCount, fmtPct, GB, plural } from '../lib/format';
 import { href } from '../lib/router';
 import { useFetch } from '../lib/useFetch';
 import { getStatus } from '../lib/api';
@@ -60,14 +60,15 @@ export default function StatusBar() {
           href={href('library')}
           title={
             archive
-              ? `${count(archive.moments as number, 'claim')} about ${count(
+              ? `${plural(archive.moments as number, 'claim')} about ${plural(
                   archive.videos as number,
                   'reel'
                 )}`
               : 'reading /api/status'
           }
         >
-          {count(archive?.videos as number, 'reel')} · {count(archive?.moments as number, 'claim')}
+          {plural(archive?.videos as number, 'reel')} ·{' '}
+          {plural(archive?.moments as number, 'claim')}
         </a>
 
         {archive?.dense_ready !== undefined && (

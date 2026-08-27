@@ -20,7 +20,7 @@ import { ArrowDownToLine, ExternalLink, Copy, Play, X, Zap } from 'lucide-react'
 import type { Moment } from '../types';
 import { enqueueVideo, getVideo, posterUrl, prioritizeMirror } from '../lib/api';
 import { channelTally, chipClass } from '../lib/channels';
-import { fmtAgo, fmtBytes, fmtCompact, fmtDate, fmtDur, fmtT, clip } from '../lib/format';
+import { fmtAgo, fmtBytes, fmtCompact, fmtDate, fmtDur, fmtT, clip, plural } from '../lib/format';
 import { href } from '../lib/router';
 import { useFetch } from '../lib/useFetch';
 import { useState } from 'react';
@@ -146,7 +146,7 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
           {channels.length > 0 && (
             <div className="card-chips rail-chips">
               {channels.map(({ channel, count }) => (
-                <span key={channel} className={chipClass(channel)} title={`${count} claims`}>
+                <span key={channel} className={chipClass(channel)} title={plural(count, 'claim')}>
                   {channel} <span className="facet-v-n">{count}</span>
                 </span>
               ))}

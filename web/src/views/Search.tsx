@@ -39,7 +39,7 @@ import { go, num } from '../lib/router';
 import { SEARCH_SORTS, getFacets, searchArchive, searchVisual } from '../lib/api';
 import { useDensity, useGridMode, store, type GridMode } from '../lib/store';
 import { useDebounced, useFetch } from '../lib/useFetch';
-import { fmtCount, fmtMs } from '../lib/format';
+import { fmtCount, fmtMs, plural } from '../lib/format';
 import { channelTally } from '../lib/channels';
 import Results from '../components/Results';
 import FacetRail from '../components/FacetRail';
@@ -223,7 +223,7 @@ export default function SearchView({ route }: ViewProps) {
         <span className="view-sub" aria-live="polite">
           {lane === 'frames'
             ? frames.data
-              ? `${fmtCount(frames.data.count)} frames · ${fmtMs(frames.data.took_ms)}`
+              ? `${plural(frames.data.count, 'frame')} · ${fmtMs(frames.data.took_ms)}`
               : ''
             : res
               ? `${fmtCount(res.total)}${
