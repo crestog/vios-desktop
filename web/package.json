@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "audit:css": "python tools/css_audit.py",
+    "audit:api": "python tools/api_audit.py",
+    "audit": "python tools/css_audit.py && python tools/api_audit.py",
     "gen:api": "openapi-typescript http://127.0.0.1:7000/api/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {

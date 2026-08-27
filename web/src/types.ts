@@ -13,9 +13,21 @@
  *   - a number that was never measured is `null`, and `null` is not `0`.
  *     A video whose duration was never probed must not sort as the shortest.
  *
- * These are hand-written for now. `npm run gen:api` regenerates
- * `api/schema.d.ts` from the live OpenAPI document, and the moment a view
- * disagrees with the server the build is where it should break.
+ * These are hand-written, and they stay hand-written. `npm run gen:api` does
+ * regenerate `api/schema.d.ts` from the live OpenAPI document, but it cannot
+ * check any of this: none of the 109 handlers annotate a `response_model`, so
+ * every 200 in that document is `{}` and every response in the 5,515 lines it
+ * emits is `unknown`. Nothing imports the file and it is gitignored. Annotating
+ * the handlers would also fight the second convention above — a failure is
+ * `{ok: false, note}` with a 200, which is not a second model.
+ *
+ * What *is* machine-checked is the half the document does describe. `npm run
+ * audit:api` compares every URL `lib/api.ts` builds against every route the
+ * running server mounts, and every query parameter against the ones it
+ * declares. A renamed route is a 404 the build cannot see; a dropped filter is
+ * worse, because `qs()` still sends it, FastAPI ignores what it did not declare,
+ * and the answer is a 200 carrying every row. Response *shapes* are checked by
+ * reading them.
  */
 
 /** The seven evidence channels. Colour in this app means exactly one thing. */
