@@ -651,12 +651,22 @@ a.sb-seg:hover {
 
 .spacer { flex: 1 1 auto; }
 
-/* ── Section headings ── */
+/* ── Section headings ──
+   Used two ways: wrapping an `<h2>`, and — in most of the app — as a bare-text
+   div. So the heading treatment lives on the container itself rather than on
+   the `h2`, and the `h2` rule below only has to repeat what it would inherit
+   anyway. Anything else placed inside (a `.section-link`, a `.count`) has to
+   opt back out of the display face, which those rules do. */
 .section-h {
   display: flex;
   align-items: baseline;
   gap: 10px;
   margin: 26px 0 12px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 .section-h:first-child { margin-top: 0; }
 .section-h h2 {
@@ -2805,6 +2815,685 @@ a.sb-seg:hover {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE RESULT — one card, and the three containers that hold thousands
+   Card, Spectrum and VirtualGrid are the only components that appear in
+   Home, Library and Search alike, so their geometry is agreed here once.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The poster well. A reel is 9:16 and this is stated as an aspect ratio rather
+   than a height because VirtualGrid derives its row height from the column
+   width by the same ratio — `itemW * 16/9 + SPECTRUM_H + FOOT_H`. If the two
+   ever disagree the last row of the grid is clipped or floats, and the symptom
+   looks like a scrolling bug rather than a stylesheet one. */
+.card-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+.card-poster,
+.card-clip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* The clip is stacked over the poster and crossfaded by an inline opacity the
+   component sets when the first frame actually plays. Cutting straight to a
+   `<video>` that has not decoded yet shows two frames of black, which reads as
+   a bug every time — so the poster stays underneath until it is ready. */
+.card-clip {
+  transition: opacity 90ms linear;
+  pointer-events: none;
+}
+
+/* ── The four corner labels ──
+   All four are absolute over the poster and share one plate treatment, because
+   they are read against arbitrary video content: a translucent black backing is
+   the only thing that stays legible over both a white studio and a night shot.
+   Positions are fixed per label so two never collide. */
+.card-flag,
+.card-t,
+.card-dur,
+.card-hits {
+  position: absolute;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  border-radius: var(--radius-xs);
+  background: rgba(6, 6, 8, 0.78);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+/* Top left: not on this disk. Warning-coloured because it changes what the
+   card can do — a hover clip will not play for it. */
+.card-flag {
+  top: 5px;
+  left: 5px;
+  color: var(--state-warning);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+/* Top right: the second that matched, which is the reason this card is on
+   screen at all — so it gets the accent rather than a neutral. */
+.card-t {
+  top: 5px;
+  right: 5px;
+  color: var(--accent-primary);
+  border: 1px solid rgba(129, 140, 248, 0.32);
+}
+/* Bottom right: how long the reel is. The most ignorable of the four. */
+.card-dur {
+  bottom: 5px;
+  right: 5px;
+  color: var(--text-secondary);
+}
+/* Bottom left: how many passages matched, shown only past one. */
+.card-hits {
+  bottom: 5px;
+  left: 5px;
+  color: var(--text-primary);
+}
+
+/* Exactly 70 px, and `VirtualGrid.FOOT_H` says so too. Three rows — title,
+   one metadata line, one chip row — at the line heights below come to 68, and
+   the two spare pixels are the padding's rounding. Adding a fourth row here
+   without changing FOOT_H is what clips the chips. */
+.card-foot {
+  height: 70px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+/* Two lines, then ellipsis. Titles here are Instagram captions used as titles,
+   so they run long far more often than not. */
+.card-title {
+  font-size: 11.5px;
+  line-height: 1.32;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The creator is the one part of the line worth losing characters over, so it
+   is the only shrinkable item; likes and the claim count are short and fixed. */
+.card-creator {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+.card-likes,
+.card-moments {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+}
+.card-moments { color: var(--text-disabled); }
+/* One row of channel chips, clipped rather than wrapped — wrapping would push
+   the footer past 70 px and break the grid's row arithmetic. */
+.card-chips {
+  display: flex;
+  gap: 3px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  height: 15px;
+}
+.card-chips .chip-channel {
+  padding: 0 4px;
+  font-size: 8.5px;
+  line-height: 15px;
+}
+.vios-card.is-selected {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary), var(--shadow-md);
+}
+
+/* ── Spectrum: where the evidence is, along the reel ──
+   A 4 px strip under every poster, and the densest thing in the interface: one
+   band per moment, positioned by time, coloured by channel, its height the
+   strength of the claim. Height comes in as an inline style because the same
+   component draws a 4 px hairline on a card and a 14 px scrubber in the player.
+   No `overflow: hidden` — a band at 99.8% with a minimum width would be
+   clipped to nothing, and the container is already inside a rounded card. */
+.spectrum {
+  position: relative;
+  width: 100%;
+  background: var(--bg-deep);
+  flex: 0 0 auto;
+}
+.sp-band {
+  position: absolute;
+  bottom: 0;
+  min-width: 1px;
+  border-radius: 0.5px;
+}
+/* A claim about the whole reel has no place on a timeline, so it is drawn as a
+   full-width wash at low alpha rather than a band — present, clearly not
+   located. It paints under the placed bands (the component sorts it first). */
+.sp-whole {
+  opacity: 0.16;
+  border-radius: 0;
+}
+/* The moment the search actually matched. A hairline above the band rather
+   than a colour change, because the colour is already carrying the channel. */
+.sp-best {
+  box-shadow: inset 0 1px 0 var(--text-pure), 0 0 5px rgba(255, 255, 255, 0.4);
+}
+/* The playhead. 1 px, centred on its position, and it must not eat the click
+   that seeks — the parent is the slider. */
+.sp-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--text-pure);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+}
+/* Only the player's spectrum is seekable, and only that one gets a cursor
+   saying so. On a card the same element is a picture. */
+.spectrum-live { cursor: pointer; }
+.spectrum-live:hover { background: var(--surface-1); }
+
+/* ── The virtual grid ──
+   `.vgrid` scrolls, `.vgrid-inner` is a spacer whose height is the full
+   computed total, and each `.vgrid-cell` is absolutely placed by transform.
+   Transforms rather than `top`/`left` so a scroll costs the compositor and not
+   layout — with 5,000 rows that is the difference between 60 fps and 12. */
+.vgrid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+.vgrid-inner {
+  position: relative;
+  width: 100%;
+}
+.vgrid-cell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+.vgrid-footer {
+  padding: 14px 14px 40px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* A card-shaped placeholder, for the first load only. Aspect-ratio rather than
+   a height so a skeleton grid and a real grid are the same size and the page
+   does not jump when the rows arrive. */
+.skel-grid {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+.skel-card {
+  aspect-ratio: 9 / 16;
+  width: 100%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   HOME — what the system knows, and one box to ask it
+   ══════════════════════════════════════════════════════════════════════ */
+.home { background: var(--bg-base); }
+
+/* Real posters from the archive, at 6%. Decoration with a purpose: the home
+   screen of a fresh install looks visibly different from a full one. It is
+   `aria-hidden` in the markup and `pointer-events: none` here, so it is
+   invisible to the keyboard, the screen reader and the mouse alike. The drift
+   is stopped by the global `prefers-reduced-motion` rule at the end of this
+   file. */
+.home-wall {
+  position: absolute;
+  inset: -8%;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  opacity: 0.06;
+  pointer-events: none;
+  filter: blur(1px) saturate(1.2);
+  animation: wall-drift 90s ease-in-out infinite alternate;
+}
+.home-wall img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+@keyframes wall-drift {
+  from { transform: translate3d(0, 0, 0) scale(1.02); }
+  to { transform: translate3d(-2%, -3%, 0) scale(1.08); }
+}
+
+/* Above the wall, and centred with a maximum measure: the hero is prose, and
+   prose at 1,400 px wide is unreadable no matter how good the type is. */
+.home-body {
+  position: relative;
+  z-index: 1;
+  padding: 34px 24px 64px;
+  max-width: 1180px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Every section on this page wraps its own heading, which makes that heading a
+   `:first-child` — and `.section-h:first-child` cancels the 26 px top margin
+   the layout was relying on, so the whole page came out as one undifferentiated
+   column. The space belongs to the section rather than to the heading, which is
+   also the more honest place for it: what needs separating is the *sections*.  */
+.home-body > section + section { margin-top: 28px; }
+
+.hero { margin-bottom: 34px; }.hero-h {
+  font-family: var(--font-display);
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  color: var(--text-pure);
+  margin: 0 0 8px;
+}
+/* The one word the whole application is about. Not italic — the display face's
+   italic is a slanted roman — so it is coloured and left upright. */
+.hero-h em {
+  font-style: normal;
+  color: var(--accent-primary);
+}
+.hero-p {
+  margin: 0 0 18px;
+  max-width: 60ch;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* The ask box. One row, and the input carries the icon's width as padding
+   rather than the wrapper carrying the icon as a flex item, so a long query
+   scrolls under the icon instead of pushing it out. */
+.hero-ask {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 720px;
+}
+.hero-ask-icon {
+  position: absolute;
+  left: 13px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.hero-ask-input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 14px 11px 38px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.hero-ask-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.12);
+}
+.hero-ask-input::placeholder { color: var(--text-disabled); }
+.hero-go {
+  flex: 0 0 auto;
+  padding: 11px 16px;
+  font-size: 13px;
+}
+
+/* Four example searches. Real links, so they can be middle-clicked, and they
+   are examples of *phrasing* rather than a taxonomy — the point is to show
+   that a half-remembered phrase is a valid query. */
+.hero-eg {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  font-size: 11.5px;
+}
+.hero-eg a {
+  padding: 3px 9px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+.hero-eg a:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+  background: var(--surface-2);
+}
+
+/* ── The five counts ──
+   `.stat` is already defined above with `.n`/`.l` children; Home's version
+   uses `-v`/`-l` because its value can be a skeleton element rather than
+   text, and a skeleton needs a width and a height of its own. */
+.stat-v {
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--text-pure);
+}
+.stat-l {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* Sized to a four-digit number, so the row does not resize when the counts
+   land. `display: block` because the element is an empty `<span>`. */
+.stat-skel {
+  display: block;
+  width: 58px;
+  height: 21px;
+}
+a.stat {
+  text-decoration: none;
+  color: inherit;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+a.stat:hover {
+  border-color: var(--border-active);
+  background: var(--surface-2);
+}
+
+/* ── Where the evidence comes from ──
+   One bar, nine possible segments, each `flex-grow` set to its own count — so
+   the bar is a true proportion of the archive rather than nine equal blocks.
+   `min-width: 0` on the segment and the two `overflow` rules are what let a
+   1%-of-the-archive channel be a sliver instead of forcing the bar wider than
+   its container. */
+.chan-bar {
+  display: flex;
+  height: 34px;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.chan-seg {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-decoration: none;
+  /* The hue arrives as an inline background from `channelVar()`. Text over it
+     is near-black rather than white: every one of the nine channel hues is a
+     light pastel, and white-on-pastel fails contrast at every size. */
+  color: rgba(6, 6, 8, 0.82);
+  font-size: 10px;
+  font-weight: 600;
+  transition: filter var(--transition-fast);
+}
+.chan-seg:hover { filter: brightness(1.18); }
+.chan-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chan-n {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  opacity: 0.75;
+  flex: 0 0 auto;
+}
+.home-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+/* The "all of it →" link at the end of a section heading. Pushed to the far
+   end so the heading text and the escape hatch are at opposite margins. */
+.section-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+.section-link:hover { color: var(--text-pure); }
+
+/* ── The recent strip ──
+   Horizontal, and it scrolls rather than wrapping: this is "the last eighteen",
+   a single row you skim, not a grid you search. Cell widths are inline. */
+.strip-lane {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+}
+.strip-cell {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+
+/* ── The concept cloud ──
+   Font size and colour arrive inline, from the node's own weight and kind. All
+   this rule does is lay them out and keep the baselines from fighting. */
+.cloud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 13px;
+  line-height: 1.25;
+}
+.cloud-w {
+  text-decoration: none;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+.cloud-w:hover {
+  opacity: 1 !important;
+  transform: translateY(-1px);
+}
+
+/* ── Right now on this machine ──
+   Three tiles that are each a link into the view that owns the number. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  gap: 10px;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 15px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.tile:hover {
+  border-color: var(--border-active);
+  background: var(--surface-2);
+}
+.tile-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tile-h svg { color: var(--accent-primary); }
+.tile-big {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--text-pure);
+}
+/* The unit beside the number is not the number. Same treatment as `.dim`, but
+   scoped here because it also has to shed the mono face and the size. */
+.tile-big .dim {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+}
+.tile-sub {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+.tile-sub code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+/* A wrapping bag of chips — creators on Home, values in a facet rail. */
+.facet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.facet-chips a { text-decoration: none; }
+/* The count riding inside a chip. Dimmed against its own chip colour rather
+   than given a neutral, so the chip stays one object. */
+.facet-v-n {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  opacity: 0.6;
+}
+
+.home-foot {
+  margin-top: 40px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-disabled);
+}
+
+/* ── The brand mark ──
+   A dot and a word. The dot is not decoration: it is the only thing in the
+   header that is always the accent colour, which is what makes the top-left
+   corner findable when every other element in the row is a neutral icon. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  text-decoration: none;
+  margin-right: 4px;
+}
+.brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-primary);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-pure);
+}
+
+/* ── The header's ask box ──
+   The same search as Home's hero, reachable from every view and from Ctrl-K.
+   Narrower on purpose: it is a jump-to, not the place you compose a query, and
+   the hero is the one that gets the full measure. `flex-shrink` is allowed
+   because the nav beside it must not be pushed off the row — at the narrow end
+   this box gives up its width first, and the media query at the bottom of this
+   file drops it entirely. */
+.header-ask {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 260px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 8px 0 9px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition-fast);
+}
+.header-ask:focus-within { border-color: var(--border-focus); }
+.header-ask > svg {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+}
+.header-ask-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+.header-ask-input::placeholder { color: var(--text-disabled); }
+/* The shortcut hint disappears once you are typing in the box it describes —
+   at that point it is telling you how to do the thing you are already doing,
+   and it is competing for the same 40 px the query needs. */
+.header-ask kbd {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-disabled);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+.header-ask:focus-within kbd { display: none; }
 
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }
