@@ -655,6 +655,60 @@ class Ledger:
                             + out.get(FETCHING, 0))
         return out
 
+    def seeded(self) -> dict:
+        """Has this ledger ever been told what the channel already holds?
+
+        The one question `counts()` cannot answer. An empty ledger and a ledger
+        that has read the channel and found it empty produce the same counts,
+        and they mean opposite things: the second says "nothing is captured",
+        the first says "nobody has asked yet". Acting on the first as if it were
+        the second is how the capture engine spends a week of Instagram requests
+        re-downloading 552 reels that are already sitting in the channel, and
+        then uploads every one of them a second time.
+
+        Three keys are evidence, and all three are read rather than one new one,
+        because a ledger that was seeded before this method existed has already
+        done the work and must not be told it hasn't:
+
+          * `scan_high_water` — a channel scan finished and recorded where it
+            got to (`seed.seed_from_channel`).
+          * `last_channel_scan` — rows were adopted from a scan
+            (`seed.adopt_all`). Set even by a scan that found nothing new.
+          * `seeded_from_urls` — the operator pasted the list by hand
+            (`seed.seed_from_urls`). No message ids, but the ledger knows what
+            not to fetch, which is the whole point.
+
+        `how` is for the interface: "scanned" and "pasted" are different levels
+        of confidence and a person deciding whether to trust the queue should
+        be able to see which one they have.
+        """
+        water = int(self.get_meta("scan_high_water", 0) or 0)
+        scanned = self.get_meta("last_channel_scan", "") or ""
+        pasted = self.get_meta("seeded_from_urls", "") or ""
+
+        def _at(*vals) -> float:
+            for v in vals:
+                try:
+                    f = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if f > 0:
+                    return f
+            return 0.0
+
+        how = ("scanned" if (water > 0 or scanned)
+               else "pasted" if pasted else "")
+        return {
+            "seeded": bool(how),
+            "how": how,
+            "at": _at(scanned, pasted),
+            "scanned_to": water,
+            # What the last scan said the channel holds — not a count of rows,
+            # so it stays true about the channel even when the ledger is
+            # replaced by a restore.
+            "in_channel": int(self.get_meta("channel_known", 0) or 0),
+        }
+
     def collections(self) -> list:
         rows = self.conn.execute(
             "SELECT m.collection AS name, COUNT(*) AS n, "

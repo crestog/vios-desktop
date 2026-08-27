@@ -333,6 +333,18 @@ class CaptureEngine:
               f"{counts.get('remaining', 0)} to capture, "
               f"{counts.get('uploaded', 0)} already done")
 
+        # The check that is worth a week. Blocking only when Start would
+        # actually refuse, so a first run with working credentials passes here
+        # and says what it is about to do rather than reading as a failure.
+        seed, gate = self.ledger.seeded(), self._seed_gate(True)
+        check("Channel seed", not gate,
+              (f"scanned to message {seed['scanned_to']:,} — the channel holds "
+               f"{seed['in_channel']} video(s)") if seed["how"] == "scanned"
+              else "adopted from a pasted list of links; message ids unknown"
+              if seed["how"] == "pasted"
+              else gate or "never scanned — Start will read the channel first",
+              blocking=bool(gate))
+
         out["ok"] = not out["blocking"]
         out["counts"] = counts
         out["eta_hours"] = round(
@@ -340,6 +352,38 @@ class CaptureEngine:
         return out
 
     # ── lifecycle ────────────────────────────────────────────────────────
+    def _seed_gate(self, seed_first: bool) -> str:
+        """Why this run must not start yet, or "" if it may.
+
+        The same rule `_seed` enforces, applied before a thread exists so the
+        answer arrives in the reply to Start instead of in a status poll a second
+        later. Both are needed: this catches the two cases already knowable —
+        the operator turned the scan off, or there are no MTProto credentials to
+        scan with — and `_seed` catches the scan that was tried and failed.
+
+        Only when there is something to capture. A ledger with an empty queue
+        cannot re-download anything, so refusing to start would be a rule
+        enforced against no risk, and the operator would be reading a paragraph
+        about duplicate uploads in answer to pressing Start on an empty queue.
+        """
+        if self.ledger.seeded()["seeded"]:
+            return ""
+        if self.ledger.counts().get("remaining", 0) <= 0:
+            return ""
+        common = ("This ledger has never been told what the channel already "
+                  "holds, so an empty row for a reel means \"not asked\" and "
+                  "not \"not captured\" — capturing now would re-download and "
+                  "re-upload everything that is already there.")
+        if not seed_first:
+            return (f"{common} Start again with the channel scan left on, or "
+                    f"press \"Scan the channel\" first.")
+        if not (self._api_id and self._api_hash):
+            return (f"{common} The scan needs the API id and API hash as well "
+                    f"as the bot token — a bot cannot read channel history "
+                    f"without them. Add them in Admin, or paste the list of "
+                    f"links already captured.")
+        return ""
+
     def start(self, seed_first: bool = True) -> dict:
         with self._lock:
             if self._thread and self._thread.is_alive():
@@ -352,6 +396,10 @@ class CaptureEngine:
             if not self._tg:
                 return {"ok": False, "state": self.state,
                         "message": "Set the bot token and channel id first."}
+            refuse = self._seed_gate(seed_first)
+            if refuse:
+                return {"ok": False, "state": self.state, "message": refuse,
+                        "needs_seed": True}
             self._stop.clear()
             self._pause.clear()
             self.error = ""
@@ -405,8 +453,11 @@ class CaptureEngine:
         led = self.ledger
         try:
             led.repair_stale()
-            if seed_first:
-                self._seed(led)
+            if seed_first and not self._seed(led):
+                # `_seed` has already set ERROR and said why. Returning here
+                # rather than raising keeps that sentence — the `except` below
+                # would overwrite it with a type name.
+                return
 
             while not self._should_stop():
                 if self._pause.is_set():
@@ -478,31 +529,55 @@ class CaptureEngine:
             if self.state not in (ERROR,):
                 self.state = IDLE
 
-    def _seed(self, led: Ledger):
+    def _seed(self, led: Ledger) -> bool:
         """Teach the ledger what is already in the channel, before fetching.
 
-        Failure here is reported and survived. The scan is an optimisation —
-        an important one, but a run that cannot read history should still
-        capture, and the ledger's own record is usually sufficient.
+        Returns whether it is safe to capture. Failure here is survivable
+        exactly once the ledger has been seeded before — the scan is then an
+        optimisation, an important one, and a run that cannot reach history
+        still has the ledger's own record of what it has done.
+
+        On a ledger that has *never* been seeded it is not an optimisation, and
+        continuing was the bug. An empty ledger then means "nobody has asked the
+        channel yet", not "nothing is captured", so proceeding fetches all 552
+        reels from Instagram over a week of paced requests to obtain files that
+        are already in the channel — and uploads every one of them again. Both
+        halves of that are irreversible from here: the requests are spent and
+        the duplicates are posted. So the run stops and says which of the two
+        answers it needs.
         """
-        from .seed import seed_from_channel
+        first_time = not led.seeded()["seeded"]
         self.message = "Reading the channel to see what is already captured…"
-        try:
-            res = seed_from_channel(
-                led, self._tg, self._api_id, self._api_hash,
-                on_progress=lambda at, head, n: setattr(
-                    self, "message",
-                    f"Scanning channel {at}/{head} — {n} reels found"),
-                should_stop=self._should_stop)
-            if res.get("skipped"):
-                self.message = "Channel unchanged since the last scan."
-            else:
-                self.message = (f"Channel has {res['in_channel']} reels; "
-                                f"{res['adopted']} were new to the ledger.")
-        except Exception as exc:
-            self.message = (f"Could not read the channel ({exc}). Continuing "
-                            f"from the local ledger.")
-            led.log("seed-failed", str(exc)[:400])
+        res = self.seed_ledger(
+            on_progress=lambda at, head, n: setattr(
+                self, "message",
+                f"Scanning channel {at}/{head} — {n} reels found"))
+        err = res.get("error")
+        if err:
+            if first_time:
+                self.state = ERROR
+                self.error = (
+                    f"Could not read the channel ({err}), and this ledger has "
+                    f"never been told what the channel already holds. Refusing "
+                    f"to capture: an empty ledger would look like an empty "
+                    f"archive and every reel already uploaded would be fetched "
+                    f"and posted a second time. Fix the scan (it needs the API "
+                    f"id and hash, not just the bot token), or paste the list "
+                    f"of links already captured — either one satisfies this and "
+                    f"the queue then runs untouched.")
+                self.message = self.error
+                led.log("halt", self.error)
+                return False
+            self.message = (f"Could not read the channel ({err}). Continuing "
+                            f"from the local ledger, which has been seeded "
+                            f"before.")
+            return True
+        if res.get("skipped"):
+            self.message = "Channel unchanged since the last scan."
+        else:
+            self.message = (f"Channel has {res['in_channel']} reels; "
+                            f"{res['adopted']} were new to the ledger.")
+        return True
 
     def _one(self, led: Ledger, item: dict) -> bool:
         """Capture a single reel. Returns False if it failed."""
@@ -828,6 +903,9 @@ class CaptureEngine:
             "message": self.message,
             "error": self.error,
             "counts": counts,
+            # Whether the queue can be trusted, which `counts` cannot say: an
+            # unseeded ledger and a finished one look identical in it.
+            "seeded": led.seeded(),
             "session": {
                 "captured": self.session_done,
                 "failed": self.session_failed,

@@ -438,6 +438,12 @@ def seed_from_urls(ledger: Ledger, text: str,
     the old list by hand and the ledger will never fetch those reels. Their
     message ids are unknown, so the rows carry `msg_id = 0` — enough to stop a
     re-download, and a later channel scan fills in the rest.
+
+    Records that it happened, because it is the other half of `Ledger.seeded()`:
+    the engine refuses to run against a ledger that has never been told what the
+    channel holds, and pasting the list *is* being told. Without this mark the
+    fallback would satisfy nothing and the operator with no api hash would be
+    stuck behind a guard they had already answered.
     """
     n = 0
     for line in (text or "").splitlines():
@@ -446,6 +452,8 @@ def seed_from_urls(ledger: Ledger, text: str,
             continue
         ledger.adopt(can[0], can[1], 0)
         n += 1
+    if n:
+        ledger.set_meta("seeded_from_urls", str(time.time()))
     ledger.conn.commit()
     ledger.log("seed", f"{source}: {n} link(s) marked already captured")
     return {"adopted": n}

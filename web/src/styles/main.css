@@ -1439,6 +1439,14 @@ a.sb-seg:hover {
   color: var(--text-tertiary);
 }
 .cap-lbl .dim { font-size: 10px; text-transform: none; letter-spacing: 0; line-height: 1.45; }
+/* The seed line under the two scan buttons. Reads as a caption to them, so it
+   sits tight under the row rather than spaced like a panel field. */
+.cap-note {
+  margin-top: -2px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
 .cap-ta { resize: vertical; font-family: var(--font-mono); font-size: 10px; line-height: 1.5; }
 /* Preflight: seven checks, and the verdict above them rather than below, because
    the verdict is the answer and the checks are the evidence. */
@@ -1533,6 +1541,21 @@ a.sb-seg:hover {
   color: var(--state-success);
   background: rgba(74, 222, 128, 0.08);
   border-color: rgba(74, 222, 128, 0.24);
+}
+/* A third tone, because the seed notice is neither. "The channel has never been
+   scanned" is not an error when the credentials to scan with are present — it is
+   a thing about to happen, and painting it red would train the operator to
+   ignore the case where it is red. */
+.cap-notice.is-warn {
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.26);
+}
+.cap-notice code {
+  font: 10px var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .cap-idle { font-size: 11px; padding: 2px 0; }

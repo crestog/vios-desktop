@@ -208,6 +208,22 @@ export default function CaptureView({ route }: ViewProps) {
   const ready = Boolean(settings?.bot_token_set && settings?.channel);
 
   /**
+   * The one thing that stops Start, and the same rule the server applies in
+   * `Engine._seed_gate`. A ledger that has never read the channel cannot tell
+   * "not captured" from "not asked", so capturing against it re-downloads and
+   * re-uploads everything already in the channel — a week of Instagram requests
+   * and a duplicate of every reel.
+   *
+   * It is only a *block* when there is nothing the scan could run with. With an
+   * API id and hash present, Start scans first and the notice is a heads-up
+   * about the two-minute walk, not a refusal.
+   */
+  const seed = st?.seeded;
+  const needsSeed = Boolean(st && !seed?.seeded && n(counts, 'remaining') > 0);
+  const canScan = Boolean(settings?.api_credentials_set);
+  const seedBlocks = needsSeed && !canScan;
+
+  /**
    * Every button goes through here. Three jobs: one at a time (a double-click on
    * Start must not start twice), the server's own sentence is what gets shown on
    * failure, and the poll is pulled forward so the button visibly lands rather
@@ -286,11 +302,15 @@ export default function CaptureView({ route }: ViewProps) {
           ) : (
             <button
               className="btn btn-sm btn-primary"
-              disabled={Boolean(busy) || !ready}
+              disabled={Boolean(busy) || !ready || seedBlocks}
               title={
-                ready
-                  ? 'scan the channel for what is already there, then start capturing'
-                  : 'set the bot token and channel id first'
+                !ready
+                  ? 'set the bot token and channel id first'
+                  : seedBlocks
+                    ? 'the channel has never been read, and reading it needs the API id and hash'
+                    : needsSeed
+                      ? 'reads the channel first — a few minutes — then starts capturing what is genuinely missing'
+                      : 'scan the channel for what is already there, then start capturing'
               }
               onClick={() => act('start', () => startCapture(true))}
             >
@@ -326,6 +346,7 @@ export default function CaptureView({ route }: ViewProps) {
             <SourcesPanel
               busy={busy}
               task={st?.task}
+              seed={seed}
               onText={(text) => act('import', () => importCaptureText(text))}
               onPath={(path) => act('import', () => importCapturePath(path))}
               onFile={(file) => act('import', () => importCaptureFile(file))}
@@ -337,6 +358,31 @@ export default function CaptureView({ route }: ViewProps) {
         </aside>
 
         <div className="split-main cap-main">
+          {/* Ahead of every other notice, because it is the one that decides
+              whether the numbers below mean anything. `remaining` on an unseeded
+              ledger is not a queue, it is a list of things nobody has checked. */}
+          {needsSeed && (
+            <div className={`cap-notice ${seedBlocks ? 'is-bad' : 'is-warn'}`}>
+              <AlertTriangle size={13} />
+              <span>
+                The channel has never been read, so {fmtCount(n(counts, 'remaining'))}{' '}
+                {n(counts, 'remaining') === 1 ? 'reel is' : 'reels are'} queued without
+                anyone having checked whether {n(counts, 'remaining') === 1 ? 'it is' : 'they are'}{' '}
+                already uploaded.{' '}
+                {seedBlocks ? (
+                  <>
+                    Reading it needs the API id and hash as well as the bot token — a bot
+                    cannot read channel history without them. Add them under Credentials, or
+                    paste the list of links already captured under Sources.
+                  </>
+                ) : (
+                  <>Start reads the channel first; that takes a few minutes and then nothing
+                  already there is fetched again.</>
+                )}
+              </span>
+            </div>
+          )}
+
           {notice && (
             <div className={`cap-notice ${notice.tone === 'bad' ? 'is-bad' : 'is-ok'}`}>
               {notice.tone === 'bad' ? <AlertTriangle size={13} /> : <Check size={13} />}
@@ -896,6 +942,7 @@ function PreflightPanel({ busy }: { busy: string }) {
 function SourcesPanel({
   busy,
   task,
+  seed,
   onText,
   onPath,
   onFile,
@@ -904,6 +951,7 @@ function SourcesPanel({
 }: {
   busy: string;
   task?: CaptureStatus['task'];
+  seed?: CaptureStatus['seeded'];
   onText: (t: string) => void;
   onPath: (p: string) => void;
   onFile: (f: File) => void;
@@ -938,6 +986,24 @@ function SourcesPanel({
         >
           Rescan
         </button>
+      </div>
+
+      {/* Under the two buttons that change it, because "never" is the answer
+          that explains why Start refused and it belongs next to the fix. */}
+      <div className="cap-note">
+        {!seed || !seed.seeded ? (
+          'the channel has never been read'
+        ) : seed.how === 'pasted' ? (
+          <>
+            adopted from a pasted list · no message ids, so a scan is still worth running
+          </>
+        ) : (
+          <>
+            read to message {fmtCount(seed.scanned_to)} · {fmtCount(seed.in_channel)}{' '}
+            {seed.in_channel === 1 ? 'video' : 'videos'} in the channel
+            {seed.at ? <> · {fmtAgo(seed.at)}</> : null}
+          </>
+        )}
       </div>
 
       <label className="cap-lbl">

@@ -915,12 +915,37 @@ export interface CaptureTask {
 }
 
 /** `/api/capture/status` — `engine.status()` plus the task slot. */
+/**
+ * What the ledger knows about the channel's contents, from
+ * `Ledger.seeded()`. The one fact that decides whether the queue can be
+ * trusted.
+ */
+export interface CaptureSeed {
+  seeded: boolean;
+  /** `scanned` (read over MTProto) · `pasted` (a list of links, no message ids) · `''`. */
+  how: string;
+  /** When, as epoch seconds. 0 when never. */
+  at: number;
+  /** Highest channel message id the scan reached. */
+  scanned_to: number;
+  /** How many videos that scan found in the channel — a fact about the channel, not a row count. */
+  in_channel: number;
+}
+
 export interface CaptureStatus {
   /** `idle` | `running` | `paused` | `stopping` | `error`. */
   state: string;
   message: string;
   error: string;
   counts: CaptureCounts;
+  /**
+   * Whether the ledger has ever been told what the channel already holds.
+   * `counts` cannot answer this — an unseeded ledger and a finished one look
+   * identical in it — and the engine refuses to capture while it is false,
+   * because fetching against an empty ledger re-downloads and re-uploads
+   * everything already in the channel.
+   */
+  seeded: CaptureSeed;
   session: {
     captured: number;
     failed: number;

@@ -98,6 +98,64 @@ def start_workers() -> None:
                 SUB, "WARN")
 
 
+def seed_capture() -> None:
+    """Read the channel once, in the background, so capture is safe to press.
+
+    The capture engine now refuses to run against a ledger that has never been
+    told what the channel already holds — see `capture.engine._seed_gate`. That
+    guard is correct and, on its own, it is a wall: a fresh install would open
+    the Capture tab, press Start, and be handed a paragraph about a scan it has
+    no way to know it needed. This is the other half. The scan is three or four
+    MTProto calls over ~600 message ids and takes seconds, so doing it at boot
+    costs nothing and the tab is simply ready.
+
+    Four ways this does nothing, all of them normal:
+      * `VIOS_SEED_AUTOSTART=0`, for a session opened to read the archive.
+      * no bot token or channel id — nothing to scan with, and the Capture tab
+        is where those get set. A later manual scan does the same work.
+      * no API id and hash — a bot cannot read channel history without them.
+        This is the one case worth a WARN: capture will refuse, and the reason
+        is a missing credential rather than anything the operator did.
+      * already seeded — `seed_from_channel` resumes from its watermark, so this
+        reads only what arrived since last time, which is usually nothing.
+
+    Deliberately *not* the asset backfill. `capture.backfill.autostart()` runs
+    the same seed and then uploads clips to the channel for every video missing
+    an asset set — an outward-facing write, for an hour, from a laptop that in
+    this design is the reader and not the processing plane. It stays behind its
+    button.
+    """
+    import threading                                            # noqa: PLC0415
+
+    def _go() -> None:
+        try:
+            from capture.engine import get_engine                # noqa: PLC0415
+            eng = get_engine()
+            if eng.telegram is None:
+                log("channel not scanned — no bot token yet; set it in Capture "
+                    "and the scan runs from there", SUB)
+                return
+            was = eng.ledger.seeded()["seeded"]
+            res = eng.seed_ledger()
+            if res.get("error"):
+                log(f"channel scan failed — {res['error'][:160]}", SUB,
+                    "WARN" if not was else "INFO")
+                return
+            if res.get("skipped"):
+                log("channel unchanged since the last scan", SUB)
+                return
+            log(f"channel scan: {res.get('in_channel', 0)} video(s) seen, "
+                f"{res.get('adopted', 0)} new to the ledger", SUB)
+        except Exception as e:                                  # noqa: BLE001
+            log(f"channel scan did not run — {type(e).__name__}: {e}",
+                SUB, "WARN")
+
+    if _off("VIOS_SEED_AUTOSTART"):
+        log("channel not scanned — VIOS_SEED_AUTOSTART=0", SUB)
+        return
+    threading.Thread(target=_go, name="vios-seed", daemon=True).start()
+
+
 def _stop_workers() -> None:
     """Ask both workers to finish on the way down. Never raises.
 
@@ -254,7 +312,9 @@ def create_app() -> FastAPI:
         started here rather than awaited, because the window must be
         interactive against local sqlite in well under two seconds and the
         channel is a network away. The mirror and the engine queue start the
-        same way and for the same reason — see `start_workers`.
+        same way and for the same reason — see `start_workers`. `seed_capture`
+        is a third: it teaches the capture ledger what the channel already
+        holds, which is what makes the Capture tab's Start button safe to press.
         """
         try:
             import anyio.to_thread
@@ -269,6 +329,7 @@ def create_app() -> FastAPI:
 
         atlas_server.start_boot()
         start_workers()
+        seed_capture()
         log("app up — boot running in the background", SUB)
         yield
         _stop_workers()
