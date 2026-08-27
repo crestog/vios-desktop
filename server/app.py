@@ -27,9 +27,12 @@ dependencies were all bound at decoration time.
 
 **What is deliberately left behind.** Both modules also serve their old
 frontends — `/`, `/atlas.css`, `/atlas.js`, `/favicon.ico`, `/sitemap.js`,
-`/capture`. Only `/api/*` is adopted, so those five HTML/asset routes simply do
+`/capture`. Only `/api/*` is adopted, so those six HTML/asset routes simply do
 not exist here and the new frontend owns the root. That is the whole of the
-"delete the old UI" work: not a deletion, a filter.
+"delete the old UI" work: not a deletion, a filter. 115 routes are declared
+across the four modules and 109 are adopted; the six above are the difference,
+and `web/tools/api_audit.py` checks the 109 against every URL the interface
+builds.
 """
 
 from __future__ import annotations
