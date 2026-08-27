@@ -46,6 +46,7 @@ Shards are additive where bundles are snapshots, so their merge rule is the
 mirror image: never overwrite, only fill. See `_dedup_columns` and `_enrich`.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -846,27 +847,22 @@ def _import_payloads(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
     return out
 
 
-def import_shard(info: dict, conn: sqlite3.Connection, work_dir: str) -> dict:
-    """Download one evidence shard and replay it into atlas.db."""
-    seq = "shard:" + tgchannel.shard_seq(info)
-    msg_id = info.get("message_id")
-    dest = os.path.join(work_dir, f"shard-{msg_id}.jsonl.gz")
-    _set(current=seq, detail=f"{seq} — downloading")
+def replay_shard(tables: dict, conn: sqlite3.Connection) -> tuple:
+    """Write a parsed shard's rows into atlas.db. Returns `(merged, dropped,
+    vec_bytes)`.
 
-    if not tgchannel.fetch_document(info, dest):
-        size = int(info.get("file_size") or 0)
-        return {"ok": False, "seq": seq,
-                "note": (f"could not download ({size / 1048576:.1f} MB — over "
-                         f"the Bot API's 20 MB cap and MTProto is not "
-                         f"available)" if size > config.HTTP_DOWNLOAD_LIMIT
-                         else "could not download")}
-    try:
-        header, tables = read_shard(dest)
-    except (OSError, ValueError) as exc:
-        return {"ok": False, "seq": seq, "note": f"unreadable: {exc}"}
+    Split out of `import_shard` because the local engine writes shards too, and
+    the download is the only part of importing one that needs Telegram. Every
+    property this function has is a property of the wire format rather than of
+    the transport: the tables are self-describing, so the destination is created
+    or widened from the shard's own declaration; reserved names are refused; and
+    an already-present row is enriched rather than overwritten. None of that
+    changes because the file came off this disk instead of out of the channel,
+    and having two copies of it would be the way the two paths quietly diverge.
 
-    rows_in = sum(len(v) for v in tables.values())
-    _set(detail=f"{seq} — replaying {rows_in} row(s)")
+    Does not commit the `bundles` provenance row — that differs between the two
+    callers, which is the whole of the difference between them.
+    """
     merged, dropped = {}, []
 
     # Payloads first, and by name rather than by shape. The generic loop below
@@ -940,6 +936,32 @@ def import_shard(info: dict, conn: sqlite3.Connection, work_dir: str) -> dict:
             _enrich(conn, table, cols, keys, rows)
 
     conn.commit()
+    return merged, dropped, vec_bytes
+
+
+def import_shard(info: dict, conn: sqlite3.Connection, work_dir: str) -> dict:
+    """Download one evidence shard and replay it into atlas.db."""
+    seq = "shard:" + tgchannel.shard_seq(info)
+    msg_id = info.get("message_id")
+    dest = os.path.join(work_dir, f"shard-{msg_id}.jsonl.gz")
+    _set(current=seq, detail=f"{seq} — downloading")
+
+    if not tgchannel.fetch_document(info, dest):
+        size = int(info.get("file_size") or 0)
+        return {"ok": False, "seq": seq,
+                "note": (f"could not download ({size / 1048576:.1f} MB — over "
+                         f"the Bot API's 20 MB cap and MTProto is not "
+                         f"available)" if size > config.HTTP_DOWNLOAD_LIMIT
+                         else "could not download")}
+    try:
+        header, tables = read_shard(dest)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "seq": seq, "note": f"unreadable: {exc}"}
+
+    rows_in = sum(len(v) for v in tables.values())
+    _set(detail=f"{seq} — replaying {rows_in} row(s)")
+    merged, dropped, vec_bytes = replay_shard(tables, conn)
+
     # `counts` is what the shard *holds*, not what this run happened to add.
     # A bundle's row records its manifest's counts for the same reason: the
     # Sources tab is answering "what arrived in this file", and a shard imported
@@ -970,6 +992,73 @@ def import_shard(info: dict, conn: sqlite3.Connection, work_dir: str) -> dict:
         + (f" · {vec_bytes / 1048576:.1f} MB of vectors" if vec_bytes else "")
         + (f" · dropped {len(dropped)} opaque column(s)" if dropped else ""))
     return {"ok": True, "seq": seq, "rows": merged, "shard": True,
+            "vec_bytes": vec_bytes}
+
+
+def import_local_shard(path: str, conn: sqlite3.Connection = None,
+                       keep: bool = True) -> dict:
+    """Replay a shard this machine wrote, without a round trip through Telegram.
+
+    The engine's own docstring has always claimed step 6 — *"shards are
+    automatically imported into local atlas.db"* — and there was no function
+    that could do it. `import_shard` is the only importer and its first act is
+    `tgchannel.fetch_document`, so the only way a locally-produced shard could
+    reach the reader was to upload it to the channel and download it back. On a
+    laptop that is meant to work with the channel unreachable, that is not a
+    slow path, it is no path.
+
+    `keep` defaults to True and is the opposite of `import_shard`, which deletes
+    the file it downloaded. That asymmetry is deliberate: a downloaded shard is a
+    cache of something the channel still holds, and a locally-written one is the
+    only copy of work this machine did. It is also what makes publishing later a
+    separate decision — `shardwriter.publish_shard` can still send it up when
+    credentials exist, and a reader that has already ingested it will recognise
+    the same `seq` and add nothing twice.
+
+    The provenance row records `manifest_id = NULL`, which is the honest value:
+    there is no channel message behind it. That is also what the Sources view
+    needs in order to distinguish evidence this laptop produced from evidence it
+    received, a distinction that did not exist while nothing local could write.
+    """
+    own = conn is None
+    conn = conn or connect()
+    name = os.path.basename(path)
+    seq = "local:" + name
+    try:
+        header, tables = read_shard(path)
+    except (OSError, ValueError) as exc:
+        log(f"{seq} unreadable — {exc}", "INGEST", "WARN")
+        if own:
+            conn.close()
+        return {"ok": False, "seq": seq, "note": f"unreadable: {exc}"}
+
+    try:
+        merged, dropped, vec_bytes = replay_shard(tables, conn)
+        delta = ", ".join(f"{k} +{v}" for k, v in sorted(merged.items()) if v)
+        held = {t: len(rows) for t, rows in tables.items()}
+        conn.execute(
+            "INSERT OR REPLACE INTO bundles(seq, manifest_id, schema, "
+            "created_at, code_commit, parts, bytes, counts, imported_at, "
+            "status, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (seq, None, header.get("schema"), str(header.get("at") or ""),
+             header.get("component") or "", 1, os.path.getsize(path),
+             json.dumps(held), time.time(), "ok",
+             ("truncated — kept what was readable. "
+              if header.get("_torn") else "")
+             + (delta or "nothing new")
+             + (" · dropped " + ", ".join(dropped[:6]) if dropped else ""))[:400])
+        conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+    if not keep:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
+    log(f"{seq} imported — {delta or 'no new rows'}"
+        + (f" · dropped {len(dropped)} opaque column(s)" if dropped else ""))
+    return {"ok": True, "seq": seq, "rows": merged, "local": True,
             "vec_bytes": vec_bytes}
 
 

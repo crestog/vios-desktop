@@ -920,6 +920,37 @@ CATALOGUE = tuple(_STRUCTURE + _SIGNAL + _PERCEPTION + _LANGUAGE)
 BY_ID = {c.id: c for c in CATALOGUE}
 
 
+def register(component: Component, replace: bool = False) -> Component:
+    """Add a component to the catalogue at import time. Returns what is in it.
+
+    This file is a *copy* of the processing plane's catalogue and is kept
+    line-for-line comparable with it — that is what lets WIRE.md say the two
+    sides agree about what a pass is. So a pass that exists only on this laptop
+    cannot be added by editing the list above without making that comparison
+    meaningless. It is registered from the outside instead, by the package that
+    implements it (`runners.install`), which keeps the local addition and the
+    local code that justifies it in the same place.
+
+    Idempotent by default: re-registering an id already present returns the
+    existing component rather than duplicating it, because `install()` is called
+    from module import and a module can be imported twice through two paths.
+    `replace=True` is the seam for a genuine redefinition and is not used today.
+
+    Rebuilding `CATALOGUE` as a tuple rather than appending to a list keeps it
+    immutable for every reader, which matters because `defaults()`, `rows()` and
+    `plan_cohorts` all iterate it and a mutable global they could accidentally
+    sort in place is a bug with no symptom until the Engine tab reorders itself.
+    """
+    global CATALOGUE, BY_ID                     # noqa: PLW0603
+    existing = BY_ID.get(component.id)
+    if existing is not None and not replace:
+        return existing
+    CATALOGUE = tuple([c for c in CATALOGUE if c.id != component.id]
+                      + [component])
+    BY_ID = {c.id: c for c in CATALOGUE}
+    return component
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Reading the catalogue
 # ══════════════════════════════════════════════════════════════════════════
@@ -1246,6 +1277,59 @@ def plan_cohorts(ids, vram_budget_mb: int, gpu_count: int = 1,
     return [c for c in cohorts if c.components]
 
 
+def missing_modules(ids) -> dict:
+    """Which components' `requires` are not importable here. `{cid: reason}`.
+
+    Thirty-one of this catalogue's thirty-four components declare a `requires`
+    tuple — `("faster_whisper",)`,
+    `("transformers", "torch")` — with the comment *"importable module names, for
+    preflight"*. Nothing read it. The consequence is specific and it was visible
+    in the interface: this laptop has a 6 GB card with 4,984 MB usable, so
+    `transcribe` at 3,100 MB passes the VRAM check, `unrunnable()` returns no
+    reason for it, and the Engine tab prints **ready** for a pass whose library
+    is not installed. A capability list that is never consulted is worse than no
+    list, because it reads as a check that passed.
+
+    `find_spec` rather than `import_module`: this runs on every catalogue read,
+    and importing torch to find out whether torch is importable costs seconds
+    and a GPU context. A dotted name (`pyannote.audio`) needs its parent
+    imported before the child can be located, which `find_spec` does itself and
+    which is why `ModuleNotFoundError` is caught rather than avoided.
+
+    Results are cached, because the answer cannot change inside one process:
+    nothing here installs a package, and a `pip install` in another window is a
+    restart either way. `_MODULES.clear()` is the seam if that ever stops being
+    true.
+    """
+    import importlib.util                                       # noqa: PLC0415
+
+    out = {}
+    for cid in ids:
+        c = BY_ID.get(cid)
+        if c is None or not c.requires:
+            continue
+        gone = []
+        for mod in c.requires:
+            if mod not in _MODULES:
+                try:
+                    _MODULES[mod] = importlib.util.find_spec(mod) is not None
+                except (ImportError, AttributeError, ValueError):
+                    # ImportError covers a parent package that will not import;
+                    # AttributeError a namespace package with no __path__;
+                    # ValueError a module already in sys.modules with no spec.
+                    _MODULES[mod] = False
+            if not _MODULES[mod]:
+                gone.append(mod)
+        if gone:
+            out[cid] = ("not installed on this machine: " + ", ".join(gone)
+                        + (" — pip install it and re-queue" if len(gone) == 1
+                           else " — install them and re-queue"))
+    return out
+
+
+_MODULES: dict = {}
+
+
 def unrunnable(ids, res: dict) -> dict:
     """Components the measured machine cannot host, with the reason.
 
@@ -1257,6 +1341,12 @@ def unrunnable(ids, res: dict) -> dict:
     that flag is a statement about the whole machine rather than about VRAM — a
     CPU pass can be flagged as well. It is the plan's way of saying the same
     thing the coverage row will say per video: not broken, not here.
+
+    A missing library is reported last, and only for a component the hardware
+    could otherwise have hosted. The order is what makes the reason useful: on a
+    machine with no GPU at all, "no GPU in this session" is the fact worth
+    printing for twenty passes, and "install torch" would be advice that changes
+    nothing. See `missing_modules` for why this check did not exist until now.
     """
     out = {}
     per_card = res.get("usable_vram_mb", 0)
@@ -1280,6 +1370,9 @@ def unrunnable(ids, res: dict) -> dict:
             out[cid] = f"needs {c.vram_mb} MB across cards, {total} MB usable"
         elif c.cards == 1 and c.vram_mb > per_card:
             out[cid] = f"needs {c.vram_mb} MB on one card, {per_card} MB usable"
+
+    for cid, why in missing_modules([i for i in ids if i not in out]).items():
+        out[cid] = why
     return out
 
 
