@@ -68,7 +68,7 @@ import {
   spriteUrl,
 } from '../lib/api';
 import { useFetch } from '../lib/useFetch';
-import { fmtBytes, fmtCompact, fmtDur, fmtT, clip, plural } from '../lib/format';
+import { fmtBytes, fmtCompact, fmtT, clip, plural } from '../lib/format';
 import { ALL_CHANNELS, channelOf, chipClass, type ChannelName } from '../lib/channels';
 import { store } from '../lib/store';
 import Spectrum from '../components/Spectrum';
@@ -77,6 +77,17 @@ import FrameTrack from '../components/FrameTrack';
 
 /** 50 ms → 20 Hz. See the header note on why not 4 Hz and not 60. */
 const HEAD_MS = 50;
+
+/**
+ * The scrub preview's display width, matching `FRAME_W` in FrameTrack so the
+ * popup and the strip below it show the same size picture, and matching
+ * `.scrub-tile-none`'s width in main.css so the popup is the same size whether
+ * or not the sheet exists. `POP_PAD` is `.scrub-pop`'s 4 px padding plus its 1 px
+ * border on both sides — needed to keep the popup inside the track, and the one
+ * number here that a stylesheet edit can silently invalidate.
+ */
+const POP_W = 108;
+const POP_PAD = 10;
 
 export default function WatchView({ route }: ViewProps) {
   const key = route.key || '';
@@ -90,6 +101,20 @@ export default function WatchView({ route }: ViewProps) {
   const [drawer, setDrawer] = useState(true);
   const [only, setOnly] = useState<ChannelName | null>(null);
   const [said, setSaid] = useState<string | null>(null);
+  /**
+   * The length of the file actually being decoded, once the decoder reports it.
+   *
+   * This outranks `videos.duration` deliberately. Everything on this screen is a
+   * projection onto one axis — where each band sits in the spectrum, where the
+   * playhead is, what second a scrub x maps to — and the metadata row is a
+   * number *copied* from whatever wrote it, while this one is *measured* from
+   * the bytes on screen. When they disagree every band is misplaced by the
+   * ratio: the archive's `testkey` says 4.0 and its proxy decodes to 6.41, which
+   * draws a claim ending at 4.0 s hard against the right edge of a bar that runs
+   * to 6.4 — 62% of the way along. Deriving the timeline from the thing being
+   * played is the only version that cannot drift.
+   */
+  const [fileDur, setFileDur] = useState<number | null>(null);
   const seeded = useRef(false);
 
   const detail = useFetch((signal) => getVideo(key, true, signal), [key]);
@@ -99,8 +124,14 @@ export default function WatchView({ route }: ViewProps) {
 
   const meta = detail.data?.meta;
   const moments = detail.data?.moments || [];
-  const duration = meta?.duration ?? sprite.data?.duration ?? null;
+  const duration = fileDur ?? meta?.duration ?? sprite.data?.duration ?? null;
   const where = detail.data?.playback?.where;
+
+  /** Whatever the element currently knows, if it is a usable number. */
+  const readDur = useCallback(() => {
+    const d = vid.current?.duration;
+    if (typeof d === 'number' && Number.isFinite(d) && d > 0) setFileDur(d);
+  }, []);
 
   // A fresh key is a different reel: the entry timestamp has to be applied
   // again, and the old one must not leak into it.
@@ -108,6 +139,7 @@ export default function WatchView({ route }: ViewProps) {
     seeded.current = false;
     setAt(entryT ?? 0);
     setSaid(null);
+    setFileDur(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -296,6 +328,7 @@ export default function WatchView({ route }: ViewProps) {
               playsInline
               preload="metadata"
               onLoadedMetadata={() => {
+                readDur();
                 if (seeded.current) return;
                 seeded.current = true;
                 if (entryT !== undefined && entryT > 0) seek(entryT);
@@ -303,6 +336,10 @@ export default function WatchView({ route }: ViewProps) {
                   /* autoplay refused with sound — the play button still works */
                 });
               }}
+              /* Fires separately from `loadedmetadata` when a container reports its
+                 length late, and it is the event that turns an initial `Infinity`
+                 into a real number on a progressively-served file. */
+              onDurationChange={readDur}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
               onTimeUpdate={() => {
@@ -340,8 +377,14 @@ export default function WatchView({ route }: ViewProps) {
               >
                 {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>
+              {/* `fmtT` on both halves, not `fmtT` / `fmtDur`. They disagree about
+                  what a short reel is: `fmtT(6.4)` is "6.4s" and `fmtDur(6.4)` is
+                  "0:06", so the pair rendered as "1.0s / 0:06" — two scales on one
+                  axis, and the reader has to convert one of them to know how far
+                  through they are. `fmtT` already switches to m:ss above a minute,
+                  so it covers both a six-second reel and a four-minute one. */}
               <span className="watch-time">
-                {fmtT(at)} <span className="dim">/ {fmtDur(duration)}</span>
+                {fmtT(at)} <span className="dim">/ {duration === null ? '—' : fmtT(duration)}</span>
               </span>
               <span className="spacer" />
               {said && <span className="watch-said">{said}</span>}
@@ -553,12 +596,26 @@ function ScrubTrack({
     const i = Math.min(sprite.count - 1, Math.max(0, Math.round(hover.t / sprite.interval)));
     const col = i % Math.max(1, sprite.cols);
     const row = Math.floor(i / Math.max(1, sprite.cols));
+    // Drawn at the frame strip's width rather than the sheet's own tile size.
+    // This archive's sheets are 160×284, which would put a 284 px panel over a
+    // 26 px track and cover most of the reel you are scrubbing through. Scaling
+    // `background-size` and the offset by the same factor is still one fetch and
+    // one `background-position` change — the browser does the resampling, so the
+    // 16 ms budget is untouched — and it makes the preview the same size as the
+    // "no sheet yet" placeholder, so the popup does not resize on you when you
+    // move between a derived reel and one the mirror has not reached.
+    const k = sprite.tile_w > 0 ? POP_W / sprite.tile_w : 1;
+    const h = sprite.tile_h * k;
     return {
-      width: sprite.tile_w,
-      height: sprite.tile_h,
+      width: POP_W,
+      height: h,
       backgroundImage: `url(${spriteUrl(spriteKey)})`,
-      backgroundSize: `${sprite.cols * sprite.tile_w}px ${sprite.rows * sprite.tile_h}px`,
-      backgroundPosition: `-${col * sprite.tile_w}px -${row * sprite.tile_h}px`,
+      // Deliberately unrounded, and expressed in the *same* scaled units as the
+      // offsets below: rounding the sheet and the offset separately lets them
+      // disagree by a fraction of a pixel, which shows up as a sliver of the
+      // neighbouring frame down one edge.
+      backgroundSize: `${sprite.cols * POP_W}px ${sprite.rows * h}px`,
+      backgroundPosition: `-${col * POP_W}px -${row * h}px`,
     } as React.CSSProperties;
   }, [sprite, hover, spriteKey]);
 
@@ -571,7 +628,16 @@ function ScrubTrack({
         if (!el || span <= 0) return;
         const r = el.getBoundingClientRect();
         const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-        setHover({ t: frac * span, x: frac * r.width });
+        // The popup is centred on the pointer and every ancestor up to
+        // `.watch-body` clips, so an unclamped `x` slices the preview in half at
+        // both ends of the track — exactly where you scrub to check the first and
+        // last second. `half` is capped at r.width / 2 so a track narrower than
+        // the popup still centres it instead of inverting the bounds.
+        const half = Math.min((POP_W + POP_PAD) / 2, r.width / 2);
+        setHover({
+          t: frac * span,
+          x: Math.min(r.width - half, Math.max(half, frac * r.width)),
+        });
       }}
       onMouseLeave={() => setHover(null)}
     >

@@ -176,52 +176,97 @@ export default function DrillDown({ target }: { target: DrillTarget }) {
                       </a>
                     )}
                     {c.video?.title && <span className="dim">{c.video.title}</span>}
-                    {c.video?.duration !== undefined && (
-                      <span className="dim">{fmtDur(c.video.duration)}</span>
+                    {/* "on record", and the title says whose record. The player
+                        beside this panel reads the length off the file it is
+                        decoding, and for this archive's `testkey` the two
+                        disagree — 4.0 stored against 6.41 measured. Both numbers
+                        are true statements about different things, so the one
+                        place they appear together has to say which is which. */}
+                    {c.video?.duration !== undefined && c.video?.duration !== null && (
+                      <span
+                        className="dim"
+                        title="the duration stored in video_index. The player measures the file it decodes, so it can differ."
+                      >
+                        {fmtDur(c.video.duration)} on record
+                      </span>
                     )}
                   </div>
                 </section>
               )}
 
-              <section className="panel">
-                <div className="panel-h">
-                  the whole row
-                  <span className="dim">
-                    {' '}
-                    — every column, as stored. Click one to follow it.
-                  </span>
-                </div>
-                <dl className="kv">
-                  {Object.entries(c.row || {}).map(([k, v]) => (
-                    // A Fragment rather than a wrapping div: `.kv` is a two-column
-                    // grid and dt/dd have to be its direct children, or every row
-                    // sizes its own columns and the labels stop lining up.
-                    <Fragment key={k}>
-                      <dt>{k}</dt>
-                      <dd>
-                        <button
-                          className="kv-link"
-                          title={`provenance of ${c.table}.${k}`}
-                          onClick={() =>
-                            store.openDrill({
-                              table: c.table,
-                              column: k,
-                              rowid: target.rowid,
-                              value: target.rowid === undefined ? show(v) : undefined,
-                            })
-                          }
-                        >
-                          {v === null || v === undefined ? (
-                            <span className="dim">NULL</span>
-                          ) : (
-                            show(v)
-                          )}
-                        </button>
-                      </dd>
-                    </Fragment>
-                  ))}
-                </dl>
-              </section>
+              {Object.keys(c.row || {}).length > 0 ? (
+                <section className="panel">
+                  <div className="panel-h">
+                    the whole row
+                    <span className="dim">
+                      {' '}
+                      — every column, as stored. Click one to follow it.
+                    </span>
+                  </div>
+                  <dl className="kv">
+                    {Object.entries(c.row || {}).map(([k, v]) => (
+                      // A Fragment rather than a wrapping div: `.kv` is a two-column
+                      // grid and dt/dd have to be its direct children, or every row
+                      // sizes its own columns and the labels stop lining up.
+                      <Fragment key={k}>
+                        <dt>{k}</dt>
+                        <dd>
+                          <button
+                            className="kv-link"
+                            title={`provenance of ${c.table}.${k}`}
+                            onClick={() =>
+                              store.openDrill({
+                                table: c.table,
+                                column: k,
+                                rowid: target.rowid,
+                                value: target.rowid === undefined ? show(v) : undefined,
+                              })
+                            }
+                          >
+                            {v === null || v === undefined ? (
+                              <span className="dim">NULL</span>
+                            ) : (
+                              show(v)
+                            )}
+                          </button>
+                        </dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                </section>
+              ) : (
+                /* An empty `<dl>` under a header promising "every column, as
+                   stored" reads as a broken panel. It usually is not one: the
+                   server names a row only when the value identifies exactly
+                   one, because printing the first of several would be the
+                   confident-looking attribution this whole panel exists to
+                   prevent. So the panel says which case it is in, and hands you
+                   the table where you can pin a single row for yourself. */
+                <section className="panel">
+                  <div className="panel-h">the whole row</div>
+                  <p className="cell-note">
+                    {typeof c.same_value === 'number' && c.same_value > 1
+                      ? `${fmtCount(c.same_value)} rows in ${c.table} carry this value, so no one row is the row it came from. Open the table and click a cell there to pin one.`
+                      : `This value did not resolve to a single row in ${c.table}.`}
+                  </p>
+                  <div className="drawer-actions">
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => {
+                        store.closeDrill();
+                        go('data', {
+                          params: { table: c.table, q: c.value === null ? '' : show(c.value) },
+                        });
+                      }}
+                    >
+                      open {c.table}
+                      {typeof c.same_value === 'number' && c.same_value > 1
+                        ? ` — ${fmtCount(c.same_value)} matching rows`
+                        : ''}
+                    </button>
+                  </div>
+                </section>
+              )}
 
               {c.refers_to && (
                 <section className="panel">

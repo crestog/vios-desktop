@@ -1044,6 +1044,30 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
                        for d, v in zip(cur.description, got)}
         except sqlite3.Error:
             row = {}
+    elif value is not None:
+        # A caller holding only the value — a chip, a graph edge, any table
+        # rendered without rowids — used to get a drawer with an empty "whole
+        # row" panel, no reel to open and no foreign key resolved, because all
+        # three of those read `row` and `row` was only ever filled from a rowid.
+        #
+        # `LIMIT 2`, and used only when exactly one row comes back. If the value
+        # appears twice then neither row is "the row this cell came from", and
+        # printing the first would be this panel committing the exact sin it
+        # exists to prevent: an attribution that looks certain and is not. When
+        # that happens `same_value` and `elsewhere` below are the honest answer
+        # and the row panel stays empty. Two rows is also all it takes to know
+        # which case we are in, so this costs one bounded query, against a
+        # predicate `same_value` already scans the whole table for.
+        try:
+            cur = conn.execute(
+                f'SELECT * FROM "{table}" WHERE "{column}" = ? LIMIT 2',
+                (value,))
+            got = cur.fetchall()
+            if len(got) == 1:
+                row = {d[0]: reflect.cell_value(v)
+                       for d, v in zip(cur.description, got[0])}
+        except sqlite3.Error:
+            row = {}
     if value is None:
         value = row.get(column)
 
@@ -1066,10 +1090,18 @@ def api_cell(table: str, column: str, rowid: int = None, value: str = None):
         "time_column": start, "end_column": end,
     }
 
-    # The reel this cell belongs to, if the row names one. This is what turns a
-    # row of numbers into something you can watch.
-    if key and row.get(key):
-        vk = reflect.normalize_key(row[key])
+    # The reel this cell belongs to. This is what turns a row of numbers into
+    # something you can watch.
+    #
+    # Two ways to know it, and the second one earns its place: normally the row
+    # names the reel, but when *this column is the key column* the value already
+    # in hand is the reel key — and that is exactly the case where `row` is
+    # deliberately empty, because a key carried by four rows identifies none of
+    # them. Reading only from `row` made a `video_key` cell the click most
+    # obviously about a reel and the only one that offered no way to open it.
+    named = value if role == "key" else (row.get(key) if key else None)
+    if named:
+        vk = reflect.normalize_key(named)
         found = conn.execute(
             "SELECT video_key, title, duration FROM video_index "
             "WHERE video_key = ?", (vk,)).fetchone()

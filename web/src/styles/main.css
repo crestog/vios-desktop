@@ -4024,6 +4024,510 @@ a.stat:hover {
 .bulk-said { font-size: 11px; color: var(--state-success); }
 .bulk-note { font-size: 10.5px; color: var(--text-disabled); font-style: italic; }
 
+/* ══ WATCH — the player, and the two tracks under it ══
+
+   The whole geometry here exists to answer one v17 complaint: *the place where
+   frames were shown was getting so small that anything was not visible.* The
+   cause was three columns competing for width — video, frames, evidence. So:
+   the video is the only thing that gets the *height*, the frames are a
+   full-width row beneath it rather than a narrow column beside it, and the
+   evidence is a rail that can be closed to nothing. Nothing shrinks to make
+   room for something else. */
+
+/* The drawer's width lives here, once, because `.with-drawer` on the container
+   is what applies it — see the grid below. */
+.watch { --drawer-w: 352px; }
+
+/* A modifier on `.view-title`, not a replacement. 18 px is right when the title
+   is the only thing in the bar; this bar also carries a back button, a creator
+   link, a storage badge and three controls, and `.view-bar` wraps — so an
+   un-clamped title pushes the copy-link button onto a second row. */
+.watch-title {
+  min-width: 0;
+  max-width: 46ch;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-creator {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+.watch-creator:hover { color: var(--accent-primary); }
+
+/* Not `.state-box`: this reel plays, and saying so in a box the size of an
+   error would read as a failure. A single amber line that stays out of the way
+   of the video, which is the thing you came for. */
+.watch-warn {
+  flex: 0 0 auto;
+  padding: 7px 16px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--state-warning);
+  background: rgba(251, 191, 36, 0.06);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.watch-warn a { color: var(--accent-primary); }
+
+/* A grid rather than a flex row, and the columns are the *class's* job. The
+   drawer is a fixed track that exists or does not; making it a flex child with
+   its own width would put the number in two places and let them disagree.
+   `minmax(0, 1fr)` and not `1fr`: the frame strip is a horizontal scroller, and
+   a bare `1fr` track sizes to its content's min-content width, which would let
+   two hundred frames widen the whole window instead of scrolling. */
+.watch-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+.watch-body.with-drawer { grid-template-columns: minmax(0, 1fr) var(--drawer-w); }
+
+.watch-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* `flex: 1` is the whole point: the stage takes every pixel the controls, the
+   scrub track and the frame strip do not, so the video is as large as the
+   window allows and the two tracks never push it off screen. */
+.watch-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+/* Fills the stage and letterboxes with `object-fit`, rather than sizing itself
+   from its intrinsic dimensions. A `<video>` measures 300×150 until metadata
+   arrives, so auto sizing means the poster snaps to a new size a moment after
+   you press play — and the gutters this leaves are the stage's own background,
+   which is what they should be for a 9:16 reel in a landscape window. */
+.watch-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  cursor: pointer;
+}
+
+.watch-under {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 9px 14px 11px;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.watch-controls { display: flex; align-items: center; gap: 8px; }
+
+/* Tabular figures, because this number changes twenty times a second and
+   proportional digits make the whole row twitch sideways as it counts. */
+.watch-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.watch-time .dim { font-size: inherit; }
+
+.watch-said { font-size: 11px; color: var(--state-success); }
+
+/* ── The scrub track ──
+   `.scrub` is only a positioning context. The band inside it is `<Spectrum>` at
+   26 px — the same component that draws the 4 px hairline under a card, as the
+   design requires — and the popup is positioned against this box because the
+   component reports pointer x relative to it. */
+.scrub { position: relative; }
+
+/* Above the track, centred on the pointer, and deliberately unable to receive
+   the pointer: it sits directly under the cursor while you scrub, and without
+   this the mouse would enter it, leave `.scrub`, and the preview would flicker
+   off and on at every pixel. */
+.scrub-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* Size and `background-position` both arrive inline — the sheet's real tile
+   dimensions, from `/api/sprite`. `no-repeat` is load-bearing: the background
+   is the entire sheet scaled to `cols × rows` tiles, so repeating it would
+   bleed six other frames into a 108 px box. */
+.scrub-tile {
+  display: block;
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-deep);
+  background-repeat: no-repeat;
+}
+
+/* Same 9:16 box as a frame cell, so the popup does not change size depending on
+   whether the derive has run — a preview that jumps between two shapes reads as
+   a bug rather than as a missing sprite sheet. */
+.scrub-tile-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 108px;
+  height: 192px;
+  padding: 8px;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--text-disabled);
+  background: var(--surface-1);
+  border: 1px dashed var(--border-default);
+}
+
+.scrub-t {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The frame strip ──
+   A row, not a column. **The 6 px gap is a contract**: FrameTrack computes the
+   scroll target as `active * (FRAME_W + 6)`, so changing this number silently
+   stops the strip following the playhead. The 14 px of horizontal padding is
+   *not* in that sum, which makes the recentre land 14 px early — well inside
+   the half-viewport it already aims at, and worth knowing before someone
+   "fixes" the maths. */
+.ftrack {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+}
+
+/* The 108 px width comes inline for real cells; the default is here because the
+   loading state renders `.skel.ftrack-cell` with no inline style, and a
+   zero-width skeleton is indistinguishable from no strip at all. The aspect
+   ratio fixes the height before any image decodes, so the strip does not grow
+   as it fills in. */
+.ftrack-cell {
+  position: relative;
+  flex: 0 0 auto;
+  width: 108px;
+  aspect-ratio: 9 / 16;
+  padding: 0;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
+}
+.ftrack-cell img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ftrack-cell:hover { border-color: var(--border-active); }
+/* A frame whose reel has no frame rate on record. Shown, because the frame is
+   real; not seekable, because the second it lands on is not. */
+.ftrack-cell:disabled { cursor: default; opacity: 0.72; }
+
+/* `.is-active` exists as a token elsewhere in this stylesheet, but only ever
+   scoped to a table row, a stat or a tab — none of which apply here. The
+   playhead's frame needs its own treatment or it gets none. */
+.ftrack-cell.is-active {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary), var(--shadow-glow);
+}
+
+.ftrack-t {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-primary);
+  background: rgba(6, 6, 8, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+/* Applied *together with* `.ftrack`, so it has to undo the row: a sentence laid
+   out as a flex item in a horizontal scroller becomes one very long line that
+   scrolls off the side instead of wrapping. */
+.ftrack-none {
+  display: block;
+  overflow: visible;
+  padding: 11px 14px 13px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+/* The strip stopped early. Amber rather than tertiary because the alternative
+   is reading a truncated strip as the whole reel. */
+.ftrack-note {
+  flex: 0 0 auto;
+  padding: 0 14px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--state-warning);
+  background: var(--bg-base);
+}
+
+/* ── The evidence rail ──
+   Shaped like `.rail` but not one: `.rail` sets its own width, and here the
+   width belongs to the grid track above so that opening and closing the drawer
+   is a single class on one element. */
+.watch-drawer {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* A related table inside a 352 px rail. `.dtable-wrap` is `flex: 1` because it
+   is normally *the* view; here it is one block among several in a scroller, and
+   growing would stretch one table over the passages below it. */
+.watch-drawer .dtable-wrap { flex: none; max-height: 260px; }
+.watch-drawer .section-h { margin: 18px 0 8px; font-size: 13px; }
+
+.watch-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 8px 9px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+/* `.facet-v` is a full-width row in the facet rail. Here the same class is the
+   "all" pill in a wrapping row of chips, so the width has to come back off. */
+.watch-filters .facet-v { width: auto; padding: 3px 9px; font-size: 11px; }
+.watch-filters .chip-channel { cursor: pointer; font-family: var(--font-mono); }
+
+/* ── The passages ──
+   Same `.passage` grid as a search result, with two columns instead of three and
+   the text on its own line. In a result row the text is one ellipsised line
+   because you are scanning fifty reels; here you are reading one, and a 352 px
+   rail minus a 72 px chip and a 44 px timestamp leaves 200 px — enough to
+   ellipsise almost every claim into uselessness. */
+.passages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.passages > li { min-width: 0; }
+/* `auto 1fr`, not `auto auto`. The text spans both tracks, so with two `auto`
+   columns its width feeds back into both and they split it — the chip stretches
+   to 166 px and the timestamp starts halfway across the rail. `1fr` absorbs the
+   slack instead, which keeps the chip at its own width and lands every timestamp
+   in one vertical line against the rail's edge, the same as `.rail-moments`. */
+.passages .passage {
+  width: 100%;
+  grid-template-columns: auto 1fr;
+  gap: 4px 7px;
+  padding: 5px 6px;
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.passages .passage:disabled { cursor: default; }
+.passages .passage-text {
+  grid-column: 1 / -1;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  font-size: 11.5px;
+}
+
+/* The claim the playhead is currently inside — the one piece of live feedback in
+   this rail, and the reason the evidence is worth having open while it plays.
+   `.is-live` is defined elsewhere only as a `.cap-pill` pulse, so this needs its
+   own rule rather than inheriting one. */
+.passages > li.is-live > .passage {
+  background: var(--accent-glow);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+.passages > li.is-live .passage-text { color: var(--text-primary); }
+
+/* ══ THE PROVENANCE DRAWER — no number without an account of itself ══
+
+   `.drawer` and `.scrim` (the panel itself, its position and its scrim) are
+   defined up with the panels, because a drawer is a shape the app reuses. These
+   are the parts specific to what this one *says*: the value, what kind of column
+   it is, who else carries it, and the query that returns it. */
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.drawer-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+
+/* Mono, because this is `table.column` — an identifier you may be about to type
+   into a query, not a title. `anywhere` rather than `break-word`: some table
+   names in this schema have no break opportunity at all, and the alternative is
+   one line pushing the close button off the panel. */
+.drawer-title {
+  margin: 3px 0 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text-pure);
+  overflow-wrap: anywhere;
+}
+.drawer-title .dim { font-size: inherit; }
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drawer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/* The value, exactly as stored. `pre-wrap` because a transcript's own line
+   breaks are part of the value and collapsing them would be a quiet edit; the
+   height cap because a caption can be two thousand characters and this panel
+   has four more sections under it. */
+.cell-value {
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-pure);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.cell-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+
+.cell-note {
+  margin: 9px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.cell-note code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* A fact about the column — its role, its sqlite type, whether it is a key.
+   Deliberately not a `.chip-channel`: those nine colours mean "this evidence
+   came from that observer", and a grey pill next to them has to be visibly a
+   different kind of statement. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+/* Only one tag is ever on: the one saying this table feeds the search index.
+   That is the difference between a value the box can find and one it cannot, so
+   it gets the accent rather than another shade of grey. */
+.tag-on {
+  color: var(--accent-primary);
+  background: var(--accent-glow);
+  border-color: rgba(129, 140, 248, 0.45);
+}
+
+.else-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.else-list li { display: flex; align-items: baseline; gap: 6px; font-size: 12px; min-width: 0; }
+.else-list .kv-link {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+/* The query that returns the value. There is a `.dtable-more .sql` rule further
+   up for the one-line version under a table, but a bare `<pre class="sql">` had
+   no rule at all — and a `<pre>` with no wrapping turns a 90-character SELECT
+   into a horizontal scrollbar under the panel. The audit cannot see this kind of
+   gap: the token is defined, just never for this element. */
+.sql {
+  margin: 0;
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ch-speech);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: all;
+  user-select: all;
+}
+/* `.dtable-more`'s version is a 46ch one-liner in a footer, so it must keep its
+   own smaller, quieter treatment rather than inherit this block. */
+.dtable-more .sql { padding: 3px 6px; color: var(--text-tertiary); white-space: nowrap; user-select: auto; }
+
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }
 :focus-visible {
