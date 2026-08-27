@@ -303,8 +303,16 @@ export default function GraphCanvas({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const ink = color('--line') || 'rgba(140,150,165,0.35)';
-    const inkSoft = color('--line-soft') || 'rgba(140,150,165,0.16)';
+    // Every custom property read on this canvas — here and in the four blocks
+    // below — has to be a name `tokens.css` actually defines. `resolveColor`
+    // returns "" for an unknown property, so a typo or an invented name does not
+    // fail: it quietly takes the `||` fallback, and a fallback is a second
+    // palette that nothing keeps in step. Six of these used to read `--line`,
+    // `--ink`, `--bg` and `--accent`, none of which exist in this design system,
+    // so the search ring was drawing gold on an indigo app and every label wore
+    // a #0e1116 halo over a #060608 background.
+    const ink = color('--g-line') || 'rgba(140,150,165,0.35)';
+    const inkSoft = color('--g-line-soft') || 'rgba(140,150,165,0.14)';
 
     // Edges: one path for the background, one for the selection's own links.
     ctx.lineWidth = 1;
@@ -369,7 +377,7 @@ export default function GraphCanvas({
 
     // Search matches get a ring rather than a colour — colour is spoken for.
     if (mark && mark.size) {
-      ctx.strokeStyle = color('--accent') || '#e9c46a';
+      ctx.strokeStyle = color('--accent-primary') || '#818cf8';
       ctx.lineWidth = 2;
       ctx.beginPath();
       for (const b of list.current) {
@@ -385,7 +393,7 @@ export default function GraphCanvas({
       if (!id) continue;
       const b = bodies.current.get(id);
       if (!b) continue;
-      ctx.strokeStyle = color('--ink') || '#e8ecf2';
+      ctx.strokeStyle = color('--text-primary') || '#f0f0f6';
       ctx.lineWidth = id === sel ? 2 : 1.2;
       ctx.beginPath();
       ctx.arc(b.x * v.k + v.x, b.y * v.k + v.y, Math.max(2, b.r * v.k) + 3.5, 0, Math.PI * 2);
@@ -407,9 +415,9 @@ export default function GraphCanvas({
       const text = b.label.length > 26 ? `${b.label.slice(0, 25)}…` : b.label;
       ctx.globalAlpha = ring && !ring.has(b.id) ? 0.25 : 1;
       ctx.lineWidth = 3;
-      ctx.strokeStyle = color('--bg') || '#0e1116';
+      ctx.strokeStyle = color('--bg-deep') || '#060608';
       ctx.strokeText(text, sx, sy);
-      ctx.fillStyle = color('--ink-dim') || '#aeb6c2';
+      ctx.fillStyle = color('--text-secondary') || '#a3a3b5';
       ctx.fillText(text, sx, sy);
     }
     ctx.globalAlpha = 1;

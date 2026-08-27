@@ -58,6 +58,32 @@
   --st-model: #4f46e5;
   --st-db: #64748b;
 
+  /* ── Graph node kinds ──
+     `lib/kinds.ts` maps every node to one of these, and its header explains the
+     rule: a hue means *which observer made a claim*, so only a `tag` node that
+     actually records a `source` gets a channel colour. The rest get a tone from
+     here, and the tones are deliberately near-neutral — a saturated colour would
+     read as one of the seven channels and assert a provenance nobody checked.
+
+     These four were read by `GraphCanvas` before they existed. `resolveColor`
+     returns "" for an undefined property and the canvas falls back to one hard
+     -coded grey, so every reel, every dimension row and every unattributed tag
+     was drawn the same colour and the legend in the left rail was a list of
+     identical swatches. Ordered by how much of the archive each one anchors:
+     a reel is the thing claims are about and is brightest, `other` is the
+     builder's catch-all and recedes furthest. */
+  --k-video: #cfcfdd;         /* a reel — an ink tone, never a channel hue */
+  --k-tag: #9591a0;           /* a repeated value with no recorded observer */
+  --k-dim: #6f7b8c;           /* a platform-declared row, reached by foreign key */
+  --k-other: #55555f;         /* a kind the builder invented — no claim about it */
+
+  /* The graph's own edge ink. Two weights: every link, and every link once one
+     node is selected and the rest has to recede without disappearing. Not a
+     border token — these are canvas strokes, and they carry alpha because a
+     dense graph is mostly overlap. */
+  --g-line: rgba(140, 150, 165, 0.35);
+  --g-line-soft: rgba(140, 150, 165, 0.14);
+
   /* ── Accent & State ── */
   --accent-primary: #818cf8;  /* indigo */
   --accent-hover: #6366f1;

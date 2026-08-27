@@ -403,110 +403,118 @@ export default function GraphView({ route }: ViewProps) {
 
       <div className="split">
         <aside className="rail rail-left">
-          {keyList.length > 0 && (
-            <div className="rail-block">
-              <div className="rail-h">from your selection</div>
-              <div className="rail-note">
-                Built from {plural(keyList.length, 'reel')} you picked, and what they have in
-                common. <a href={href('graph')}>show the whole archive instead</a>
-              </div>
-            </div>
-          )}
-
-          {typed.trim().length > 1 && (
-            <div className="rail-block">
-              <div className="rail-h">
-                matches
-                <span className="rail-n">{fmtCount(hits.length)}</span>
-              </div>
-              {found.loading && found.first ? (
-                <div className="rail-note">looking…</div>
-              ) : hits.length ? (
-                <div className="find-list">
-                  {hits.map((n) => (
-                    <button
-                      key={n.id}
-                      className={`find-row${n.id === selected ? ' is-active' : ''}`}
-                      onClick={() => {
-                        select(n.id);
-                        if (!pic.nodes.some((x) => x.id === n.id)) void grow(n.id);
-                      }}
-                      title={`${nodeTypeLabel(n)} — ${nodeNote(n)}`}
-                    >
-                      <span className="find-dot" style={{ background: nodeCss(n) }} />
-                      <span className="find-l">{n.label}</span>
-                      <span className="find-w">{fmtCompact(n.weight)}</span>
-                    </button>
-                  ))}
+          {/* `.rail-body` is the scroller — `.rail` is `overflow: hidden` and
+              has none of its own. Without it the kind legend, the match list
+              and the whole-graph counts were four blocks in a clipped box: on
+              an archive with a dozen node kinds everything past the fold was
+              unreachable, and the blocks lost the 8 px of side padding their
+              own 4 px assumes. See main.css:405. */}
+          <div className="rail-body">
+            {keyList.length > 0 && (
+              <div className="rail-block">
+                <div className="rail-h">from your selection</div>
+                <div className="rail-note">
+                  Built from {plural(keyList.length, 'reel')} you picked, and what they have in
+                  common. <a href={href('graph')}>show the whole archive instead</a>
                 </div>
-              ) : (
-                <div className="rail-note">nothing with that in its name.</div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          <div className="rail-block">
-            <div className="rail-h">what is on screen</div>
-            <div className="kind-list">
-              {byKind.map(([kind, n]) => {
-                const off = hidden.has(kind);
-                const props = new Set(
-                  pic.nodes.filter((x) => x.kind === kind).slice(0, 400).map(nodeProp)
-                );
-                return (
-                  <button
-                    key={kind}
-                    className={`kind-row${off ? ' is-off' : ''}`}
-                    onClick={() =>
-                      setParam({
-                        hide: (off
-                          ? [...hidden].filter((k) => k !== kind)
-                          : [...hidden, kind]
-                        ).join(','),
-                      })
-                    }
-                    title={`${nodeNote({ kind })} — click to ${off ? 'show' : 'hide'}`}
-                    aria-pressed={!off}
-                  >
-                    <span className="kind-sw">
-                      {[...props].slice(0, 5).map((prop) => (
-                        <i key={prop} style={{ background: `var(${prop})` }} />
-                      ))}
-                    </span>
-                    <span className="kind-l">{kind}</span>
-                    <span className="kind-n">{fmtCount(n)}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="rail-note">
-              A colour is <em>who said it</em>, never what it is. Values mined out of a text
-              column wear their channel's hue; reels, platform rows and hashtags are deliberately
-              colourless, because nobody checked which observer put the <code>#</code> there.
-            </div>
-          </div>
+            {typed.trim().length > 1 && (
+              <div className="rail-block">
+                <div className="rail-h">
+                  matches
+                  <span className="rail-n">{fmtCount(hits.length)}</span>
+                </div>
+                {found.loading && found.first ? (
+                  <div className="rail-note">looking…</div>
+                ) : hits.length ? (
+                  <div className="find-list">
+                    {hits.map((n) => (
+                      <button
+                        key={n.id}
+                        className={`find-row${n.id === selected ? ' is-active' : ''}`}
+                        onClick={() => {
+                          select(n.id);
+                          if (!pic.nodes.some((x) => x.id === n.id)) void grow(n.id);
+                        }}
+                        title={`${nodeTypeLabel(n)} — ${nodeNote(n)}`}
+                      >
+                        <span className="find-dot" style={{ background: nodeCss(n) }} />
+                        <span className="find-l">{n.label}</span>
+                        <span className="find-w">{fmtCompact(n.weight)}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rail-note">nothing with that in its name.</div>
+                )}
+              </div>
+            )}
 
-          <div className="rail-block">
-            <div className="rail-h">the whole graph</div>
-            <dl className="kv">
-              <dt>nodes</dt>
-              <dd>{fmtCount(counts?.nodes)}</dd>
-              <dt>links</dt>
-              <dd>{fmtCount(counts?.edges)}</dd>
-              {Object.entries(counts?.kinds || {}).map(([k, n]) => (
-                <Fragment key={k}>
-                  <dt>{k}</dt>
-                  <dd>{fmtCount(n)}</dd>
-                </Fragment>
-              ))}
-              {buildState?.phase && (
-                <>
-                  <dt>last build</dt>
-                  <dd>{buildState.detail || buildState.phase}</dd>
-                </>
-              )}
-            </dl>
-            {rebuilt && <div className="rail-note">{rebuilt}</div>}
+            <div className="rail-block">
+              <div className="rail-h">what is on screen</div>
+              <div className="kind-list">
+                {byKind.map(([kind, n]) => {
+                  const off = hidden.has(kind);
+                  const props = new Set(
+                    pic.nodes.filter((x) => x.kind === kind).slice(0, 400).map(nodeProp)
+                  );
+                  return (
+                    <button
+                      key={kind}
+                      className={`kind-row${off ? ' is-off' : ''}`}
+                      onClick={() =>
+                        setParam({
+                          hide: (off
+                            ? [...hidden].filter((k) => k !== kind)
+                            : [...hidden, kind]
+                          ).join(','),
+                        })
+                      }
+                      title={`${nodeNote({ kind })} — click to ${off ? 'show' : 'hide'}`}
+                      aria-pressed={!off}
+                    >
+                      <span className="kind-sw">
+                        {[...props].slice(0, 5).map((prop) => (
+                          <i key={prop} style={{ background: `var(${prop})` }} />
+                        ))}
+                      </span>
+                      <span className="kind-l">{kind}</span>
+                      <span className="kind-n">{fmtCount(n)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="rail-note">
+                A colour is <em>who said it</em>, never what it is. Values mined out of a text
+                column wear their channel's hue; reels, platform rows and hashtags are deliberately
+                colourless, because nobody checked which observer put the <code>#</code> there.
+              </div>
+            </div>
+
+            <div className="rail-block">
+              <div className="rail-h">the whole graph</div>
+              <dl className="kv">
+                <dt>nodes</dt>
+                <dd>{fmtCount(counts?.nodes)}</dd>
+                <dt>links</dt>
+                <dd>{fmtCount(counts?.edges)}</dd>
+                {Object.entries(counts?.kinds || {}).map(([k, n]) => (
+                  <Fragment key={k}>
+                    <dt>{k}</dt>
+                    <dd>{fmtCount(n)}</dd>
+                  </Fragment>
+                ))}
+                {buildState?.phase && (
+                  <>
+                    <dt>last build</dt>
+                    <dd>{buildState.detail || buildState.phase}</dd>
+                  </>
+                )}
+              </dl>
+              {rebuilt && <div className="rail-note">{rebuilt}</div>}
+            </div>
           </div>
         </aside>
 
@@ -676,159 +684,165 @@ function Inspector({
         </button>
       </div>
 
-      <div className="gins-acts">
-        <button className="btn btn-ghost" onClick={() => onExpand(id)} title="pull its neighbours into the picture">
-          <ChevronDown size={12} /> expand
-        </button>
-        <button className="btn btn-ghost" onClick={() => onOnly(id)} title="throw the rest away and start again from here">
-          <Focus size={12} /> only this
-        </button>
-        {node && (
-          <button className="btn btn-ghost" onClick={() => onPathFrom(node)} title="find the chain of relationships from here to another node">
-            <RouteIcon size={12} /> chain from here
+      {/* Everything below the head scrolls, and `.rail` does not — same
+          division of labour as the six other views, and the reason it matters
+          more here than anywhere: this panel can hold twenty-four link rows,
+          each of which expands into the rows that assert it. */}
+      <div className="rail-body">
+        <div className="gins-acts">
+          <button className="btn btn-ghost" onClick={() => onExpand(id)} title="pull its neighbours into the picture">
+            <ChevronDown size={12} /> expand
           </button>
-        )}
-        {vkey && (
-          <a className="btn" href={href('watch', { key: vkey })}>
-            <Play size={12} /> play
-          </a>
-        )}
-      </div>
-
-      {vkey && (
-        <a className="gins-poster" href={href('watch', { key: vkey })}>
-          <img src={posterUrl(vkey, 360)} alt="" loading="lazy" decoding="async" />
-        </a>
-      )}
-
-      <dl className="kv">
-        <dt>connects</dt>
-        <dd title="summed weight of every link on this node — how much of the archive it touches">
-          {fmtCompact(node?.weight ?? 0)}
-        </dd>
-        {node?.sub && (
-          <>
-            <dt>{node.kind === 'dim' ? 'table' : node.kind === 'tag' ? 'column' : 'group'}</dt>
-            <dd>
-              {node.kind === 'dim' || node.kind === 'tag' ? (
-                <a className="kv-link" href={href('data', { params: { table: String(node.sub) } })}>
-                  {node.sub}
-                </a>
-              ) : (
-                node.sub
-              )}
-            </dd>
-          </>
-        )}
-        {typeof inReels === 'number' && (
-          <>
-            <dt>in reels</dt>
-            <dd>{fmtCount(inReels)}</dd>
-          </>
-        )}
-        {observer && (
-          <>
-            <dt>observer</dt>
-            <dd>{observer}</dd>
-          </>
-        )}
-        {fromColumns.length > 0 && node?.kind === 'hashtag' && (
-          <>
-            <dt>found in</dt>
-            <dd>{fromColumns.join(', ')}</dd>
-          </>
-        )}
-        <dt>id</dt>
-        <dd>
-          <code>{id}</code>
-        </dd>
-      </dl>
-
-      {detail.data && !detail.data.ok && (
-        <div className="rail-note">
-          {detail.data.note || 'the graph has no record of this node — rebuild it?'}
-        </div>
-      )}
-
-      {(detail.data?.records || []).length > 0 && (
-        <div className="rail-block">
-          <div className="rail-h">the rows behind it</div>
-          {(detail.data?.records || []).map((set) => (
-            <Rows key={set.table} set={set} />
-          ))}
-        </div>
-      )}
-
-      {mine.length > 0 && (
-        <div className="rail-block">
-          <div className="rail-h">
-            links
-            <span className="rail-n">{fmtCount(mine.length)} on screen</span>
-          </div>
-          <div className="elist">
-            {shownEdges.map((e) => {
-              const otherId = e.src === id ? e.dst : e.src;
-              const other = label.get(otherId);
-              const open =
-                edgeSel && edgeSel.src === e.src && edgeSel.dst === e.dst && edgeSel.rel === e.rel;
-              return (
-                <div className={`erow${open ? ' is-open' : ''}`} key={ekey(e)}>
-                  <button
-                    className="erow-h"
-                    onClick={() => setEdgeSel(open ? null : { src: e.src, dst: e.dst, rel: e.rel })}
-                    title={`why: ${e.ref || 'no reference stored'}`}
-                  >
-                    <span className="erow-rel">{e.rel}</span>
-                    <span className="erow-l" style={{ color: other ? nodeCss(other) : undefined }}>
-                      {other?.label || otherId}
-                    </span>
-                    <span className="erow-w" title="how many rows assert this link">
-                      ×{fmtCompact(e.weight || 1)}
-                    </span>
-                  </button>
-                  <button
-                    className="btn-icon erow-go"
-                    onClick={() => onSelect(otherId)}
-                    title="inspect that end"
-                  >
-                    <ArrowRight size={11} />
-                  </button>
-                  {open && <EdgeWhy src={e.src} dst={e.dst} rel={e.rel} ref_={e.ref || ''} />}
-                </div>
-              );
-            })}
-          </div>
-          {mine.length > shownEdges.length && (
-            <button className="btn btn-ghost" onClick={() => setAllEdges(true)}>
-              show the other {fmtCount(mine.length - shownEdges.length)}
+          <button className="btn btn-ghost" onClick={() => onOnly(id)} title="throw the rest away and start again from here">
+            <Focus size={12} /> only this
+          </button>
+          {node && (
+            <button className="btn btn-ghost" onClick={() => onPathFrom(node)} title="find the chain of relationships from here to another node">
+              <RouteIcon size={12} /> chain from here
             </button>
           )}
+          {vkey && (
+            <a className="btn" href={href('watch', { key: vkey })}>
+              <Play size={12} /> play
+            </a>
+          )}
         </div>
-      )}
 
-      {videos.length > 0 && (
-        <div className="rail-block">
-          <div className="rail-h">
-            reels it reaches
-            <span className="rail-n">{fmtCount(videos.length)}</span>
+        {vkey && (
+          <a className="gins-poster" href={href('watch', { key: vkey })}>
+            <img src={posterUrl(vkey, 360)} alt="" loading="lazy" decoding="async" />
+          </a>
+        )}
+
+        <dl className="kv">
+          <dt>connects</dt>
+          <dd title="summed weight of every link on this node — how much of the archive it touches">
+            {fmtCompact(node?.weight ?? 0)}
+          </dd>
+          {node?.sub && (
+            <>
+              <dt>{node.kind === 'dim' ? 'table' : node.kind === 'tag' ? 'column' : 'group'}</dt>
+              <dd>
+                {node.kind === 'dim' || node.kind === 'tag' ? (
+                  <a className="kv-link" href={href('data', { params: { table: String(node.sub) } })}>
+                    {node.sub}
+                  </a>
+                ) : (
+                  node.sub
+                )}
+              </dd>
+            </>
+          )}
+          {typeof inReels === 'number' && (
+            <>
+              <dt>in reels</dt>
+              <dd>{fmtCount(inReels)}</dd>
+            </>
+          )}
+          {observer && (
+            <>
+              <dt>observer</dt>
+              <dd>{observer}</dd>
+            </>
+          )}
+          {fromColumns.length > 0 && node?.kind === 'hashtag' && (
+            <>
+              <dt>found in</dt>
+              <dd>{fromColumns.join(', ')}</dd>
+            </>
+          )}
+          <dt>id</dt>
+          <dd>
+            <code>{id}</code>
+          </dd>
+        </dl>
+
+        {detail.data && !detail.data.ok && (
+          <div className="rail-note">
+            {detail.data.note || 'the graph has no record of this node — rebuild it?'}
           </div>
-          <div className="vlist">
-            {videos.map((v) => (
-              <a className="vrow" key={v.video_key} href={href('watch', { key: v.video_key })}>
-                <img src={posterUrl(v.video_key, 160)} alt="" loading="lazy" decoding="async" />
-                <span className="vrow-t">
-                  <span className="vrow-title">{v.title || v.video_key}</span>
-                  <span className="vrow-sub">
-                    {v.creator || 'unattributed'}
-                    {v.duration ? ` · ${fmtDur(v.duration)}` : ''}
-                    {v.moment_count ? ` · ${plural(v.moment_count, 'claim')}` : ''}
-                  </span>
-                </span>
-              </a>
+        )}
+
+        {(detail.data?.records || []).length > 0 && (
+          <div className="rail-block">
+            <div className="rail-h">the rows behind it</div>
+            {(detail.data?.records || []).map((set) => (
+              <Rows key={set.table} set={set} />
             ))}
           </div>
-        </div>
-      )}
+        )}
+
+        {mine.length > 0 && (
+          <div className="rail-block">
+            <div className="rail-h">
+              links
+              <span className="rail-n">{fmtCount(mine.length)} on screen</span>
+            </div>
+            <div className="elist">
+              {shownEdges.map((e) => {
+                const otherId = e.src === id ? e.dst : e.src;
+                const other = label.get(otherId);
+                const open =
+                  edgeSel && edgeSel.src === e.src && edgeSel.dst === e.dst && edgeSel.rel === e.rel;
+                return (
+                  <div className={`erow${open ? ' is-open' : ''}`} key={ekey(e)}>
+                    <button
+                      className="erow-h"
+                      onClick={() => setEdgeSel(open ? null : { src: e.src, dst: e.dst, rel: e.rel })}
+                      title={`why: ${e.ref || 'no reference stored'}`}
+                    >
+                      <span className="erow-rel">{e.rel}</span>
+                      <span className="erow-l" style={{ color: other ? nodeCss(other) : undefined }}>
+                        {other?.label || otherId}
+                      </span>
+                      <span className="erow-w" title="how many rows assert this link">
+                        ×{fmtCompact(e.weight || 1)}
+                      </span>
+                    </button>
+                    <button
+                      className="btn-icon erow-go"
+                      onClick={() => onSelect(otherId)}
+                      title="inspect that end"
+                    >
+                      <ArrowRight size={11} />
+                    </button>
+                    {open && <EdgeWhy src={e.src} dst={e.dst} rel={e.rel} ref_={e.ref || ''} />}
+                  </div>
+                );
+              })}
+            </div>
+            {mine.length > shownEdges.length && (
+              <button className="btn btn-ghost" onClick={() => setAllEdges(true)}>
+                show the other {fmtCount(mine.length - shownEdges.length)}
+              </button>
+            )}
+          </div>
+        )}
+
+        {videos.length > 0 && (
+          <div className="rail-block">
+            <div className="rail-h">
+              reels it reaches
+              <span className="rail-n">{fmtCount(videos.length)}</span>
+            </div>
+            <div className="vlist">
+              {videos.map((v) => (
+                <a className="vrow" key={v.video_key} href={href('watch', { key: v.video_key })}>
+                  <img src={posterUrl(v.video_key, 160)} alt="" loading="lazy" decoding="async" />
+                  <span className="vrow-t">
+                    <span className="vrow-title">{v.title || v.video_key}</span>
+                    <span className="vrow-sub">
+                      {v.creator || 'unattributed'}
+                      {v.duration ? ` · ${fmtDur(v.duration)}` : ''}
+                      {v.moment_count ? ` · ${plural(v.moment_count, 'claim')}` : ''}
+                    </span>
+                  </span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }

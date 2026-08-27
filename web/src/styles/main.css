@@ -5098,6 +5098,434 @@ a.stat:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   GRAPH — the canvas, its two rails, and the rows under a line
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The one main pane in the app that must not scroll. `.split-main`'s frame —
+   14/16/40 of padding and a vertical scroller — is right for a list of jobs and
+   wrong for a viewport you pan by dragging: the padding leaves a dead border the
+   force layout still throws nodes into, and a scrollbar appearing over the
+   canvas would swallow the wheel gestures that are supposed to zoom. Not folded
+   into the `:has()` rule near `.rows` because this pane needs two things that
+   rule does not give — a containing block for the floating controls, and
+   `hidden` on both axes. */
+.gmain {
+  position: relative;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+/* The error and empty branches render in place of the canvas, so they take the
+   whole box rather than sitting as a short strip along the top of it. */
+.gmain > .state-box { flex: 1; min-height: 0; overflow-y: auto; }
+
+.gcanvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+/* Absolutely positioned, and sized by the inline `width`/`height` `GraphCanvas`
+   writes from its own observer on this wrapper. Taking the canvas out of flow is
+   what stops that from being circular: an in-flow child carrying a pixel height
+   measured off its parent can only ever grow the parent, and the observer would
+   fire again on the taller box, forever. */
+.gcanvas > canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  cursor: grab;
+  /* The pointer handlers implement panning and pinch themselves, so the browser
+     must not also read a drag as a scroll. */
+  touch-action: none;
+}
+/* Set while the pointer is over a node, and the only affordance that says a
+   click will do something — the nodes are painted, so there is no element to
+   hover and nothing else can carry the hint. `:active` comes after it so a press
+   still reads as a grab, whether you caught a node or empty space. */
+.gcanvas > canvas.is-over { cursor: pointer; }
+.gcanvas > canvas:active { cursor: grabbing; }
+
+.gctl {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(6, 6, 8, 0.72);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(8px);
+}
+
+/* `.btn-icon` is a modifier: it sets a padding and a radius on the assumption
+   that `.btn` beside it supplies colour, background and border. Every icon
+   button on this screen is a bare `.btn-icon`, so without this the five zoom
+   controls render as UA-grey system buttons floating over the canvas.
+   `.rail-head .btn-icon` does this same job for the view header. */
+.gctl .btn-icon,
+.gpath > .btn-icon,
+.gins-head .btn-icon,
+.erow-go {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.gctl .btn-icon:hover,
+.gpath > .btn-icon:hover,
+.gins-head .btn-icon:hover,
+.erow-go:hover { color: var(--text-primary); background: var(--surface-2); }
+
+.ghint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 9px;
+  max-width: 560px;
+  /* It lies along the canvas floor, and every word of it is about dragging — so
+     it must not be able to intercept the drag it is describing. */
+  pointer-events: none;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-disabled);
+}
+
+/* A bar under the canvas rather than a caption over it. It says the picture is
+   incomplete, and floating text on a drawing of the archive is the one thing on
+   this screen that can be mistaken for part of the drawing. */
+.gnote {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--state-warning);
+  background: rgba(251, 191, 36, 0.07);
+  border-top: 1px solid rgba(251, 191, 36, 0.24);
+}
+
+.gpath {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px 6px 12px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border-top: 1px solid var(--border-subtle);
+  /* A chain can be eight hops of long labels. It scrolls sideways instead of
+     wrapping, so the bar stays one line tall and the canvas keeps its height. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.gpath > svg { flex-shrink: 0; color: var(--accent-primary); }
+.gpath > span { flex-shrink: 0; white-space: nowrap; }
+/* Sticky, not just `margin-left: auto`: once the chain is wider than the bar
+   there is no free space for the auto margin to eat, and the one control that
+   ends this mode would sit off the right edge until you scrolled to it. */
+.gpath > .btn-icon {
+  position: sticky;
+  right: 0;
+  flex-shrink: 0;
+  margin-left: auto;
+  background: var(--surface-1);
+}
+.gpath-chain { display: flex; align-items: center; gap: 1px; min-width: 0; }
+.gpath-chain > span { display: inline-flex; align-items: center; gap: 1px; }
+.gpath-chain svg { flex-shrink: 0; color: var(--text-disabled); }
+
+/* ── The left rail: what your typing matched, and what is on screen ── */
+
+.find-list,
+.kind-list { display: flex; flex-direction: column; gap: 1px; }
+.kind-list { margin-bottom: 10px; }
+
+/* `minmax(0, 1fr)` on the middle track, not a bare `1fr`: a bare one floors at
+   the label's min-content width, so a forty-character tag would push the count
+   out past the rail's edge instead of truncating. */
+.find-row,
+.kind-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.find-row:hover,
+.kind-row:hover { color: var(--text-primary); background: var(--surface-2); }
+/* `.is-active` is defined six other times in this stylesheet and every one of
+   them is scoped to a different parent, so this row — the rail's only way of
+   saying which match you are looking at — inherited nothing at all. */
+.find-row.is-active {
+  color: var(--text-pure);
+  background: var(--accent-glow);
+  border-color: rgba(129, 140, 248, 0.45);
+}
+.find-dot { width: 8px; height: 8px; border-radius: var(--radius-full); }
+.find-l,
+.kind-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-w,
+.kind-n {
+  font: 10px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+/* A hidden kind stays legible and stays clickable — this row is the only way
+   back, so it dims rather than disappears. */
+.kind-row.is-off { opacity: 0.42; }
+.kind-row.is-off .kind-l {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-disabled);
+}
+/* Up to five swatches, because a kind is not one colour: a `tag` node takes the
+   hue of whichever observer recorded it, so `tag` legitimately spans several
+   channels and one averaged square would be a claim about the palette that the
+   palette does not make. The width is fixed at all five so the labels beside it
+   line up down the rail instead of stepping in and out by kind. */
+.kind-sw {
+  display: inline-flex;
+  justify-content: flex-start;
+  gap: 1px;
+  width: 24px;
+}
+.kind-sw i { display: block; width: 4px; height: 13px; border-radius: 1px; }
+
+/* ── The inspector: one node, and the rows that put it there ── */
+
+/* Wider than the 232 px default, and set on the rail itself the way Roadmap's
+   is: this panel prints raw column values — a `moments` row runs to 220
+   characters — while the left rail holds labels and counts. */
+.gins { --rail-w: 340px; }
+
+/* Deliberately outside `.rail-body`, so the label of the thing you are reading
+   about stays put while twenty-four link rows scroll under it. */
+.gins-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.gins-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: var(--radius-full);
+}
+.gins-t { flex: 1; min-width: 0; }
+.gins-l {
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1.25;
+  color: var(--text-primary);
+  /* A label can be a sixty-character caption fragment with no spaces in it. */
+  overflow-wrap: anywhere;
+}
+.gins-k { margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--text-tertiary); }
+
+.gins-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+/* 9:16 at this rail's width is 570 px of poster before a single fact, so the
+   height is capped and the crop is centred. */
+.gins-poster {
+  display: block;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.gins-poster img { display: block; width: 100%; height: 210px; object-fit: cover; }
+/* The facts grid sits directly in the scroller rather than inside a
+   `.rail-block`, so `.rail-block + .rail-block` never draws its divider. This
+   hands that divider to whichever block follows instead of inventing a second
+   rule that would double up wherever both apply. */
+.gins .rail-body > .kv { padding: 2px 4px 12px; }
+.gins .rail-body > .kv + .rail-block { border-top: 1px solid var(--border-subtle); }
+.gins .rail-body > .kv code { font: 10.5px var(--font-mono); overflow-wrap: anywhere; }
+
+/* ── Links, and why each one exists ── */
+
+.elist { display: flex; flex-direction: column; gap: 2px; }
+/* Two columns and, when it is open, a third row spanning both: the header
+   button, the jump-to-that-end button, and the panel of database rows that
+   assert the link. Grid rather than flex because that span is the whole shape —
+   the answer to "why" belongs under the row, not beside the arrow. */
+.erow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+}
+.erow.is-open { background: var(--surface-1); border-color: var(--border-default); }
+.erow-h {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 4px 5px 6px;
+  font-size: 11.5px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.erow-h:hover { background: var(--surface-2); }
+/* The relationship's name, not the node's — clipped hard, because it is a column
+   name out of the schema and reading the far end of the link matters more. The
+   full text is in the row's `title`. */
+.erow-rel {
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 9.5px var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+/* The colour comes from the node at the other end, inline. This is the fallback
+   for a link whose far end is not in the picture yet. */
+.erow-l {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.erow-w {
+  font: 10px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+/* Two-stage reveal: barely there until the pointer is anywhere on the row, then
+   full accent on the arrow itself. Twenty-four of these at full contrast would
+   out-shout the labels they sit beside.
+
+   The third stage has to be written `.erow:hover .erow-go:hover` rather than the
+   obvious `.erow-go:hover`, because hovering the arrow also hovers the row: the
+   bare form is specificity 0,1,1 and loses to the row-hover rule's 0,2,0, so the
+   accent never arrived and the arrow stopped at grey. */
+.erow-go { color: var(--text-disabled); }
+.erow:hover .erow-go { color: var(--text-secondary); }
+.erow:hover .erow-go:hover { color: var(--accent-primary); }
+.ewhy {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0 3px 4px;
+  padding: 7px 8px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+}
+.ewhy-ref { font-size: 10.5px; line-height: 1.55; color: var(--text-tertiary); }
+.ewhy-ref code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ── One table's rows, as they are ── */
+
+.rset { display: flex; flex-direction: column; gap: 4px; }
+.rset + .rset { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--border-subtle); }
+.rset-h { display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
+.rset-n { margin-left: auto; font: 10px var(--font-mono); color: var(--text-tertiary); }
+/* A `.kv` on a far tighter column than the detail panels it was written for:
+   these are database column names against database values, forty rows deep in a
+   340 px rail, and 96 px of `dt` would leave nothing for the value. */
+.rset-row {
+  grid-template-columns: minmax(0, 84px) minmax(0, 1fr);
+  gap: 2px 8px;
+  padding: 5px 6px;
+  font-size: 11px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+}
+.rset-row dt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.rset-row .dim { font-size: 10.5px; }
+/* `.cell-btn`'s 10 px of side padding is sized for a table cell. The negative
+   margin keeps the value flush with the label above the hover ring, and gives
+   the ring somewhere to draw. */
+.rset-row .cell-btn { padding: 1px 4px; margin-left: -4px; }
+/* Nested inside a link's "why" panel, which is already `--bg-deep`, so the rows
+   step one shade up from it rather than repeating `--surface-1` on itself. */
+.ewhy .rset-row { background: var(--bg-base); }
+
+/* ── The reels a node reaches ── */
+
+.vlist { display: flex; flex-direction: column; gap: 3px; }
+.vrow {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  transition: background var(--transition-fast);
+}
+.vrow:hover { background: var(--surface-2); border-color: var(--border-subtle); }
+/* The thumbnail's box is fixed here rather than left to the image, so a rail of
+   twelve reels does not reflow twelve times as the posters decode. */
+.vrow img {
+  display: block;
+  width: 34px;
+  height: 46px;
+  object-fit: cover;
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+}
+.vrow-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vrow-title {
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--text-primary);
+  /* Two lines, then clipped — a reel's title is a caption's first sentence. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.vrow:hover .vrow-title { color: var(--text-pure); }
+.vrow-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
 /* ── Accessibility floor ── */
 a, button { -webkit-tap-highlight-color: transparent; }
 :focus-visible {
