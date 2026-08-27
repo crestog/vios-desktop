@@ -115,6 +115,72 @@ input, button, select, textarea {
   font-family: var(--font-mono);
   flex-shrink: 0;
   z-index: 40;
+  /* Segments keep their intrinsic width, so a window narrowed past every media
+     query below would otherwise give the whole app a horizontal scrollbar for
+     the sake of a footer. Clipped at the edge instead. */
+  overflow: hidden;
+}
+
+/* Not one of these classes existed, so the strip that is visible on every single
+   view rendered as its own concatenated markup: "local1 reels · 1 claims" and
+   "0%engine ○ 0203.6 GB free", wrapped onto a second line inside a 28px footer.
+   The gap is the whole fix; the rest is keeping it there. */
+.sb-left,
+.sb-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.sb-seg {
+  /* Intrinsic width, and deliberately not shrinkable. `overflow: hidden` on a
+     flex item zeroes its automatic minimum size, so the first version of this
+     rule let every segment ellipsise at once the moment the window got narrow —
+     measured at a 320px pane, "● local" rendered 13px wide as "●…". A strip
+     that drops a fact it cannot fit is honest; one that crushes all seven into
+     ellipses is unreadable. So only `.sb-gpu` yields, and only after `.sb-opt`
+     has already left. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+a.sb-seg:hover {
+  color: var(--text-secondary);
+}
+/* The one long value — a full marketing GPU name — and the only one whose
+   complete text is already in its tooltip, so an ellipsis costs nothing. */
+.sb-gpu {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The whole strip wants ~780px. Past that the least load-bearing facts leave in
+   order: the GPU name, then whether semantic search is built. Connection state,
+   the archive counts and the two worker progresses stay to the last, because
+   those are the ones being watched. */
+@media (max-width: 860px) {
+  .sb-gpu {
+    display: none;
+  }
+}
+@media (max-width: 680px) {
+  .sb-opt {
+    display: none;
+  }
+}
+.sb-dim {
+  color: var(--text-disabled);
+}
+.sb-ok {
+  color: var(--state-success);
+}
+.sb-bad {
+  color: var(--state-error);
+}
+.sb-warn {
+  color: var(--state-warning);
 }
 
 /* ── Common Buttons ── */

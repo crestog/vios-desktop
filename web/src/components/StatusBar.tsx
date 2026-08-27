@@ -14,7 +14,7 @@
  */
 
 import { useDisk, useEngine, useHost, useMirror, useOffline } from '../lib/store';
-import { fmtBytes, fmtCount, fmtPct, GB } from '../lib/format';
+import { count, fmtBytes, fmtCount, fmtPct, GB } from '../lib/format';
 import { href } from '../lib/router';
 import { useFetch } from '../lib/useFetch';
 import { getStatus } from '../lib/api';
@@ -36,6 +36,12 @@ export default function StatusBar() {
   const freeGb = disk ? disk.free_bytes / GB : null;
   const lowDisk = disk?.below_floor || (freeGb !== null && freeGb < (disk?.free_floor_gb ?? 8));
 
+  // torch reports the full marketing name — "NVIDIA GeForce RTX 3050 6GB Laptop
+  // GPU" — which is 38 characters of which 15 are the vendor saying its own name
+  // twice. Dropped here rather than truncated by CSS, so what is lost is the
+  // part that carries no information. The tooltip keeps the string verbatim.
+  const gpuName = gpu?.name?.replace(/^NVIDIA\s+(GeForce\s+)?|^AMD\s+|^Intel\(R\)\s+/i, '');
+
   return (
     <footer className="vios-status-bar">
       <div className="sb-left">
@@ -54,18 +60,19 @@ export default function StatusBar() {
           href={href('library')}
           title={
             archive
-              ? `${fmtCount(archive.moments as number)} claims about ${fmtCount(
-                  archive.videos as number
-                )} reels`
+              ? `${count(archive.moments as number, 'claim')} about ${count(
+                  archive.videos as number,
+                  'reel'
+                )}`
               : 'reading /api/status'
           }
         >
-          {fmtCount(archive?.videos as number)} reels · {fmtCount(archive?.moments as number)} claims
+          {count(archive?.videos as number, 'reel')} · {count(archive?.moments as number, 'claim')}
         </a>
 
         {archive?.dense_ready !== undefined && (
           <span
-            className="sb-seg"
+            className="sb-seg sb-opt"
             title={
               archive.dense_ready
                 ? `semantic search is live${archive.dense_model ? ` — ${archive.dense_model}` : ''}`
@@ -125,7 +132,7 @@ export default function StatusBar() {
         </a>
 
         <span
-          className="sb-seg"
+          className="sb-seg sb-gpu"
           title={
             gpu
               ? `${gpu.name} · ${fmtCount(gpu.free_mb)} MB free of ${fmtCount(
@@ -140,7 +147,7 @@ export default function StatusBar() {
                 : 'probing the machine'
           }
         >
-          {gpu ? `${gpu.name} ${fmtCount(gpu.free_mb)}MB` : host ? 'no gpu' : '—'}
+          {gpu ? `${gpuName} ${fmtCount(gpu.free_mb)}MB` : host ? 'no gpu' : '—'}
         </span>
       </div>
     </footer>

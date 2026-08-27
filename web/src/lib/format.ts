@@ -53,6 +53,21 @@ export function fmtCount(n: number | null | undefined): string {
   return Math.round(n).toLocaleString();
 }
 
+/**
+ * `count(1, 'reel')` → `"1 reel"`, `count(0, 'reel')` → `"0 reels"`.
+ *
+ * Small, but this is the fourth place the same defect appeared — "1 reels",
+ * "1 claims", "1 reels are queued" — and each one was fixed with its own inline
+ * ternary. A number and its noun always travel together, so they format
+ * together.
+ *
+ * An unknown count keeps the plural: "— reels" reads as a value not yet
+ * arrived, where "— reel" reads as a bug.
+ */
+export function count(n: number | null | undefined, one: string, many?: string): string {
+  return `${fmtCount(n)} ${n === 1 ? one : many ?? `${one}s`}`;
+}
+
 /** Compact, for a badge where four digits will not fit: `12.4k`. */
 export function fmtCompact(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
