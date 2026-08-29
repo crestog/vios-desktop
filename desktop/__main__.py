@@ -257,9 +257,23 @@ def main() -> int:
         # context menu.
         "debug": os.environ.get("VIOS_DEBUG", "1") != "0",
     }
-    icon = os.path.join(_ROOT, "desktop", "vios.png")
-    if os.path.isfile(icon):
-        kwargs["icon"] = icon           # Phase 6 draws it; absent is fine now.
+    # On Windows the icon must be an `.ico`, and that is not a preference — it is
+    # the only format that works. The WinForms backend does `self.Icon =
+    # Icon(path)` (`webview/platforms/winforms.py:244`) and `System.Drawing.Icon`
+    # reads only the ICO container, so a PNG raises `ArgumentException: Argument
+    # 'picture' must be a picture that can be used as a Icon` *on the .NET UI
+    # thread*. Nothing in Python catches that: the process dies inside
+    # `webview.start` without unwinding, so `_run()`'s handler never fires, no
+    # dialog appears, and the log simply stops after "Using WinForms / Chromium".
+    # Measured — the app served 109 routes, opened a window, and vanished with no
+    # traceback. So a PNG is not a fallback here; it is a crash, and listing it as
+    # one would leave a landmine for whoever deletes the `.ico`. The GTK and Cocoa
+    # backends do want the PNG, hence the two orders.
+    for name in ("vios.ico",) if os.name == "nt" else ("vios.png", "vios.ico"):
+        candidate = os.path.join(_ROOT, "desktop", name)
+        if os.path.isfile(candidate):
+            kwargs["icon"] = candidate
+            break
     os.makedirs(kwargs["storage_path"], exist_ok=True)
 
     webview.start(**kwargs)
@@ -267,5 +281,85 @@ def main() -> int:
     return 0
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# LAUNCHED FROM AN ICON
+# ══════════════════════════════════════════════════════════════════════════
+# The desktop shortcut runs `pythonw.exe -m desktop`, which is the only way to
+# open a window without a console flashing behind it. `pythonw` costs two things
+# that a console gave for free, and both are handled here rather than accepted:
+# there is nowhere for output to go, and there is nowhere for a crash to be seen.
+STREAM_LOG = "console.log"
+
+
+def _redirect_streams_to_log() -> str:
+    """Point `stdout`/`stderr` at a file when there is no console, and say where.
+
+    Under `pythonw` both are `None`, so every `print` in this application raises
+    `AttributeError` — `logger._safe_print` swallows it and the file log survives,
+    but uvicorn's startup lines and any traceback outside a `try` are simply gone.
+    Sending them to a file is strictly better than the console they replace: it is
+    still there tomorrow, and the Admin tab can read it.
+
+    Returns "" when a console is present, which is also the signal that a failure
+    can just be printed instead of shown in a dialog.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return ""
+    target = os.path.join(paths.LOG_DIR, STREAM_LOG)
+    try:
+        os.makedirs(paths.LOG_DIR, exist_ok=True)
+        # Line-buffered: a crash must not lose the lines that explain it.
+        handle = open(target, "a", encoding="utf-8", errors="replace",
+                      buffering=1)
+    except OSError:
+        # Better a launch with no output than no launch. `logger` writes its own
+        # file through its own handle and does not depend on this.
+        return ""
+    handle.write(f"\n{'=' * 70}\n{time.strftime('%Y-%m-%d %H:%M:%S')}  "
+                 f"launched without a console\n{'=' * 70}\n")
+    sys.stdout = sys.stderr = handle
+    return target
+
+
+def _message_box(title: str, text: str) -> None:
+    """A native error dialog. The only way an icon launch can report anything."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, title, 0x10)  # MB_ICONERROR
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
+def _run() -> int:
+    """`main()`, with somewhere for its output to go and a way to fail visibly.
+
+    A shortcut that does nothing when double-clicked is indistinguishable from a
+    broken shortcut, so every path out of here that is not a working window says
+    so on screen — but only when there is no console, because a terminal already
+    shows a traceback better than a dialog can.
+    """
+    stream_log = _redirect_streams_to_log()
+    try:
+        code = main()
+    except Exception as e:                              # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        log(f"launch failed — {type(e).__name__}: {e}", SUB, "ERROR")
+        if stream_log:
+            _message_box(
+                f"{TITLE} could not start",
+                f"{type(e).__name__}: {e}\n\n"
+                f"The full traceback is in:\n{stream_log}\n\n"
+                f"The application log is in:\n{paths.LOG_DIR}")
+        return 1
+    if code and stream_log:
+        _message_box(
+            f"{TITLE} could not start",
+            f"The window did not open (exit code {code}).\n\n"
+            f"Output from this launch is in:\n{stream_log}\n\n"
+            f"The application log is in:\n{paths.LOG_DIR}")
+    return code
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_run())
