@@ -512,10 +512,33 @@ export const getEngineStats = (signal?: AbortSignal) =>
 export const getEngineJobs = (state?: string, limit = 100, signal?: AbortSignal) =>
   request<EngineJob[]>(`/engine/jobs${qs({ state, limit })}`, {}, signal);
 
-export const enqueueVideo = (video_key: string, component_ids?: string[]) =>
-  request<{ ok: boolean; enqueued: number }>('/engine/enqueue', {
+/**
+ * Queue passes on one reel.
+ *
+ * `enqueued` on its own cannot be read: zero means "already processed" as often
+ * as "nothing could run here", and the button that calls this used to say
+ * *"queued 0 passes"* for both. So the answer is three numbers — what was
+ * queued, what needed nothing done, and what this machine cannot host, each with
+ * its reason.
+ *
+ * `force` re-runs passes that already completed. Off by default: the normal
+ * meaning of processing a reel is "do what is missing", and a sweep that redid
+ * finished work would never reach the end of a library.
+ */
+export const enqueueVideo = (
+  video_key: string,
+  component_ids?: string[],
+  force = false
+) =>
+  request<{
+    ok: boolean;
+    enqueued: number;
+    already: number;
+    blocked: Record<string, string>;
+    order: string[];
+  }>('/engine/enqueue', {
     method: 'POST',
-    body: JSON.stringify({ video_key, component_ids: component_ids ?? null }),
+    body: JSON.stringify({ video_key, component_ids: component_ids ?? null, force }),
   });
 
 // The worker is a daemon thread, so these flip a flag and hand back the fresh

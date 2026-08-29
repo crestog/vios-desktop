@@ -18,6 +18,7 @@ import engine_queue
 import library
 import mirror
 import paths
+import runners
 import studio
 from logger import vios_log as log
 from sizing import registry
@@ -123,6 +124,10 @@ def list_local_videos(status: str = "active", limit: int = 100, offset: int = 0)
 class EnqueueRequest(BaseModel):
     video_key: str
     component_ids: Optional[List[str]] = None
+    # Re-run a pass that already completed. Off by default because the normal
+    # meaning of pressing "process this reel" is "do what is missing", and a
+    # sweep that redid finished work would never reach the end of a library.
+    force: bool = False
 
 
 @router.get("/api/engine/stats")
@@ -137,8 +142,17 @@ def list_engine_jobs(state: Optional[str] = None, limit: int = 100):
 
 @router.post("/api/engine/enqueue")
 def enqueue_engine_job(req: EnqueueRequest):
-    count = engine_queue.enqueue_video(req.video_key, req.component_ids)
-    return {"ok": True, "enqueued": count}
+    """Queue passes on one reel. Reports what was queued *and what was not*.
+
+    `enqueued` alone cannot be read: zero means "already processed" as often as
+    it means "nothing could run", and the button that calls this said *"queued 0
+    passes"* for both. So the counts come back separately — `already` for passes
+    that need nothing done, `blocked` for the ones this machine cannot host, with
+    each reason — and the interface says which happened.
+    """
+    out = engine_queue.enqueue_video(req.video_key, req.component_ids,
+                                     force=bool(req.force))
+    return {"ok": True, **out}
 
 
 # The worker runs in a daemon thread started at boot, so these three only ever
@@ -175,13 +189,26 @@ def list_components(refresh: bool = False):
     `unrunnable: true` with the shortfall spelled out, rather than the number
     sitting there unexplained.
 
+    Runnability comes from `runners.blocked`, not `registry.unrunnable`, and the
+    difference is six passes. The catalogue's `requires` describes the
+    implementation on the GPU plane — `colour` declares `cv2` because up there it
+    is k-means in CIELAB — while the runner here is ffmpeg's `signalstats` and
+    needs nothing. Asked the catalogue, this route reported six working passes as
+    held, which is the same class of error as reporting a broken one as ready.
+
+    `measured` is false when the machine probe itself raised, and it is the
+    caveat on every reason at once: with no reading, a hardware ground like *"no
+    GPU in this session"* is what the catalogue infers from an absent key rather
+    than something anyone observed. The view says so instead of each row
+    pretending otherwise.
+
     Runnability is the only field that moves, and only when free VRAM does (a
     model loading, a pass finishing), so the view fetches this once per mount
     instead of polling it. `?refresh=1` re-measures the machine first.
     """
     res = _resources(refresh)
     ids = registry.all_ids()
-    blocked = registry.unrunnable(ids, res) if res else {}
+    blocked = runners.blocked(ids, res)
     out = []
     for c in registry.CATALOGUE:
         reason = blocked.get(c.id)
@@ -203,6 +230,11 @@ def list_components(refresh: bool = False):
             "summary": c.summary,
             "produces": list(c.produces),
             "kinds": list(c.kinds),
+            # Whether an implementation of this pass exists on this machine at
+            # all, which is a different question from whether it can run today.
+            # A pass with no runner is waiting on code; a pass with a runner and
+            # a reason is waiting on hardware or a library.
+            "runner": c.id in runners.HANDLERS,
             "unrunnable": reason is not None,
             "reason": reason,
         })
@@ -212,6 +244,7 @@ def list_components(refresh: bool = False):
         "total": len(out),
         "runnable": sum(1 for r in out if not r["unrunnable"]),
         "blocked": len(blocked),
+        "runners": sum(1 for r in out if r["runner"]),
         "defaults": sum(1 for c in registry.CATALOGUE if c.default_on),
         "components": out,
     }

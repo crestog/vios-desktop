@@ -18,7 +18,7 @@ import { useState } from 'react';
 import { Copy, Network, X, Zap } from 'lucide-react';
 import { enqueueVideo, prioritizeMirror } from '../lib/api';
 import { go } from '../lib/router';
-import { fmtCount } from '../lib/format';
+import { fmtCount, plural } from '../lib/format';
 
 export interface BulkBarProps {
   keys: string[];
@@ -29,26 +29,36 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
 
-  const run = async (label: string, fn: (key: string) => Promise<unknown>) => {
+  const run = async (
+    label: string,
+    fn: (key: string) => Promise<unknown>,
+    // What the whole batch amounted to, when the per-reel answer carries a
+    // number. Without it "processed here: all 100" is true and useless — a
+    // hundred reels that were already measured report identically to a hundred
+    // that just queued a thousand passes.
+    tally?: (results: unknown[]) => string
+  ) => {
     setBusy(label);
     setSaid(null);
-    let ok = 0;
+    const done: unknown[] = [];
     const failures: string[] = [];
     for (const k of keys) {
       try {
-        await fn(k);
-        ok += 1;
+        done.push(await fn(k));
       } catch (e) {
         failures.push(`${k}: ${String((e as Error).message || e)}`);
       }
     }
     setBusy(null);
+    const ok = done.length;
     // The count of failures is reported, not swallowed — "queued 98 of 100" is
     // actionable and "done" is not.
     setSaid(
       failures.length
         ? `${label}: ${ok} of ${keys.length} · ${failures.length} failed — ${failures[0]}`
-        : `${label}: all ${ok}`
+        : tally
+          ? `${label}: ${tally(done)}`
+          : `${label}: all ${ok}`
     );
   };
 
@@ -59,7 +69,20 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
       <button
         className="btn"
         disabled={busy !== null}
-        onClick={() => void run('processed here', (k) => enqueueVideo(k))}
+        onClick={() =>
+          void run(
+            'processed here',
+            (k) => enqueueVideo(k),
+            (rs) => {
+              const rows = rs as Array<{ enqueued: number; already: number }>;
+              const q = rows.reduce((a, r) => a + r.enqueued, 0);
+              const had = rows.reduce((a, r) => a + r.already, 0);
+              return q
+                ? `${plural(q, 'pass', 'passes')} queued across ${plural(rows.length, 'reel')}`
+                : `nothing to do — ${plural(had, 'pass', 'passes')} already ran`;
+            }
+          )
+        }
         title="queue the local passes these reels are missing"
       >
         <Zap size={12} /> {busy === 'processed here' ? 'queueing…' : 'Process here'}

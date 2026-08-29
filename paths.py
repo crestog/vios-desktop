@@ -84,6 +84,15 @@ SESSION_DIR   = os.path.join(HOME, "session")
 LOG_DIR       = os.path.join(HOME, "logs")
 SCRATCH_DIR   = os.path.join(HOME, "scratch")
 
+# Evidence shards this machine wrote. Beside `bundles/` rather than inside
+# `scratch/` because the two words mean opposite things here: scratch is what a
+# pass may leave behind and anything may delete, and a local shard is the only
+# copy of work the engine did. `atlas.ingest.import_local_shard` keeps the file
+# after replaying it — a downloaded shard is a cache of something the channel
+# still holds, a locally written one is not — so this directory is also what
+# makes publishing to the channel a later and separate decision.
+SHARD_DIR     = os.path.join(HOME, "shards")
+
 MEDIA_DIR    = os.path.join(HOME, "media")
 VIDEO_DIR    = os.path.join(MEDIA_DIR, "video")
 PROXY_DIR    = os.path.join(MEDIA_DIR, "proxy")
@@ -99,8 +108,8 @@ WEB_DIR = os.path.join(_HERE, "web", "dist")
 WEB_SRC = os.path.join(_HERE, "web")
 
 _ALL_DIRS = (HOME, FRAME_VEC_DIR, BUNDLE_DIR, MODEL_DIR, SESSION_DIR, LOG_DIR,
-             SCRATCH_DIR, MEDIA_DIR, VIDEO_DIR, PROXY_DIR, POSTER_DIR,
-             SPRITE_DIR, KEYFRAME_DIR)
+             SCRATCH_DIR, SHARD_DIR, MEDIA_DIR, VIDEO_DIR, PROXY_DIR,
+             POSTER_DIR, SPRITE_DIR, KEYFRAME_DIR)
 
 
 def ensure() -> None:

@@ -209,7 +209,16 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
               onClick={async () => {
                 try {
                   const r = await enqueueVideo(videoKey);
-                  setSaid(`queued ${r.enqueued} pass${r.enqueued === 1 ? '' : 'es'} on this machine`);
+                  // Three numbers, because `enqueued: 0` is ambiguous on its own
+                  // and the honest readings are opposite: everything is already
+                  // measured, or nothing here could measure it.
+                  setSaid(
+                    r.enqueued
+                      ? `queued ${plural(r.enqueued, 'pass', 'passes')} on this machine`
+                      : r.already
+                        ? `nothing to do — all ${plural(r.already, 'local pass', 'local passes')} already ran`
+                        : 'no pass on this machine can run on this reel'
+                  );
                 } catch (e) {
                   setSaid(String((e as Error).message || e));
                 }

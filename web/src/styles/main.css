@@ -1298,6 +1298,17 @@ a.sb-seg:hover {
 .eng-current a { color: var(--text-primary); font-size: 11px; }
 .js-running-fg { color: var(--state-info); }
 .eng-cur-comp { color: var(--text-pure); font-weight: 500; }
+/* The running pass's own live line. Truncated rather than wrapped: this strip is
+   one row tall and a reflow every time ffmpeg reports a new frame count would
+   make the whole header jitter for the length of a decode. */
+.eng-cur-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .eng-sub { display: flex; align-items: center; gap: 10px; }
 
@@ -1308,6 +1319,16 @@ a.sb-seg:hover {
 .ej-state { width: 76px; }
 .ej-num { width: 46px; text-align: right; color: var(--text-tertiary); }
 .ej-detail { color: var(--state-error); max-width: 260px; }
+/* The detail column is red only when it is holding a reason to be red. It used
+   to be red unconditionally, which coloured "this reel has no audio track" as a
+   failure — the exact conflation the seven states exist to undo. The cell keeps
+   the error colour for its default content; `.ej-reason` carries a state whose
+   own chip is already saying what happened, so it stays neutral. */
+.ej-detail { color: var(--text-tertiary); }
+.ej-reason { color: var(--state-error); }
+tr:has(.js-skipped) .ej-reason,
+tr:has(.js-held) .ej-reason,
+tr:has(.js-deferred) .ej-reason { color: var(--text-secondary); }
 .ej-key { color: var(--text-secondary); text-decoration: none; }
 .ej-key:hover { color: var(--text-pure); text-decoration: underline; }
 
@@ -1325,6 +1346,14 @@ a.sb-seg:hover {
 .js-running { color: var(--state-info); background: rgba(96, 165, 250, 0.12); border-color: rgba(96, 165, 250, 0.3); }
 .js-running { animation: pulse-soft 1.8s ease-in-out infinite; }
 .js-done { color: var(--state-success); background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.25); }
+/* Skipped is a *successful* outcome — a reel with no audio track, a cut pass
+   with no shots yet — so it reads as quiet rather than as alarm. Deliberately
+   not green: the pass produced nothing, and a green chip on an empty result is
+   how a coverage matrix comes to overstate itself. */
+.js-skipped { color: var(--text-secondary); background: var(--surface-2); border-color: var(--border-active); }
+/* Deferred is in flight, not finished. Same blue family as running, without the
+   pulse, because nothing is happening right now. */
+.js-deferred { color: var(--state-info); background: rgba(96, 165, 250, 0.07); border-color: rgba(96, 165, 250, 0.2); }
 .js-failed { color: var(--state-error); background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.28); }
 .js-held { color: var(--state-warning); background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.28); }
 
@@ -1426,7 +1455,7 @@ a.sb-seg:hover {
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
-.sys-ok, .sys-held {
+.sys-ok, .sys-held, .sys-wait {
   flex-shrink: 0;
   width: 42px;
   text-align: right;
@@ -1436,6 +1465,23 @@ a.sb-seg:hover {
 }
 .sys-ok { color: var(--text-disabled); }
 .sys-held { color: var(--state-warning); cursor: help; }
+/* "No runner" is not the same shortfall as "held". Held means this machine is
+   too small; no runner means nobody has written the pass here yet, which no
+   amount of hardware fixes. Rendered as absence rather than as warning, and
+   wider because the label is two words. */
+.sys-wait { width: 58px; color: var(--text-disabled); cursor: help; }
+/* The shortfall, in the row. Takes the slack so the title truncates first: the
+   pass's name is guessable from four characters and "needs 6144 MB on one card"
+   is not. */
+.sys-why {
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 10px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    CAPTURE — a week-long process, not a progress bar

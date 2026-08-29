@@ -44,10 +44,18 @@ import { CHANNELS } from '../types';
 const fmtMB = (mb: number | null | undefined) =>
   mb === null || mb === undefined ? '—' : fmtBytes(mb * 1024 * 1024, 1);
 
+// Seven states, five of them terminal, and the labels are not interchangeable.
+// `done` and `skipped` are both successful outcomes — a reel with no audio track
+// is not a defect — while `failed` is work that should have happened and did
+// not. Showing them as one colour is what made the old two-state queue useless
+// as a report: a green wall of "completed" that included every pass that had
+// quietly declined.
 const JOB_STATE: Record<string, { label: string; cls: string }> = {
   pending: { label: 'pending', cls: 'js-pending' },
   running: { label: 'running', cls: 'js-running' },
   completed: { label: 'done', cls: 'js-done' },
+  skipped: { label: 'skipped', cls: 'js-skipped' },
+  deferred: { label: 'later', cls: 'js-deferred' },
   failed: { label: 'failed', cls: 'js-failed' },
   unrunnable: { label: 'held', cls: 'js-held' },
 };
@@ -57,6 +65,7 @@ const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'pending', label: 'pending' },
   { key: 'running', label: 'running' },
   { key: 'completed', label: 'done' },
+  { key: 'skipped', label: 'skipped' },
   { key: 'failed', label: 'failed' },
   { key: 'unrunnable', label: 'held' },
 ];
@@ -196,6 +205,7 @@ export default function EngineView({ route }: ViewProps) {
             <Count n={engine?.pending} label="pending" state="" active={stateFilter} />
             <Count n={engine?.running} label="running" state="running" active={stateFilter} />
             <Count n={engine?.completed} label="done" state="completed" active={stateFilter} />
+            <Count n={engine?.skipped} label="skipped" state="skipped" active={stateFilter} />
             <Count n={engine?.failed} label="failed" state="failed" active={stateFilter} />
             <Count n={engine?.unrunnable} label="held" state="unrunnable" active={stateFilter} />
           </div>
@@ -210,6 +220,11 @@ export default function EngineView({ route }: ViewProps) {
               <span className="eng-cur-comp">
                 {byId.get(cur.component_id)?.title || cur.component_id}
               </span>
+              {/* The pass's own live line — "decoding 1,412 of 2,280 frames".
+                  Worth the width: these are ffmpeg passes over whole videos, and
+                  without it a ninety-second decode is indistinguishable from a
+                  hang. */}
+              {cur.detail && <span className="eng-cur-detail dim">{cur.detail}</span>}
               <span className="spacer" />
               <span className="dim">{fmtAgo(cur.started_at ?? cur.created_at)}</span>
             </div>
@@ -360,6 +375,7 @@ function JobTable({
             <th>reel</th>
             <th>pass</th>
             <th className="ej-num">tries</th>
+            <th className="ej-num">rows</th>
             <th>when</th>
             <th>detail</th>
           </tr>
@@ -388,6 +404,12 @@ function JobTable({
                   </span>
                 </td>
                 <td className="ej-num">{j.attempts ?? 0}</td>
+                {/* Evidence rows the pass produced. Blank rather than 0 before it
+                    has run: an empty cell is "not yet", a 0 is "ran and measured
+                    nothing", and those are different facts about a reel. */}
+                <td className="ej-num dim" title={j.shard ? fileName(j.shard) : ''}>
+                  {j.rows === null || j.rows === undefined ? '' : fmtCount(j.rows)}
+                </td>
                 <td
                   className="dim"
                   title={fmtDate(j.finished_at ?? j.started_at ?? j.created_at)}
@@ -395,9 +417,7 @@ function JobTable({
                   {fmtAgo(j.finished_at ?? j.started_at ?? j.created_at)}
                   {done !== null ? ` · ${done.toFixed(1)}s` : ''}
                 </td>
-                <td className="ej-detail" title={j.error || ''}>
-                  {j.error ? clip(j.error, 90) : ''}
-                </td>
+                <JobDetail job={j} />
               </tr>
             );
           })}
@@ -406,6 +426,42 @@ function JobTable({
     </div>
   );
 }
+
+/**
+ * A job's `detail` cell: the reason first, then what the pass found.
+ *
+ * `reason` rather than `error`, because four of the five terminal states are not
+ * errors — *"this reel has no audio track"* is a correct outcome — and the
+ * server sends the same string under both names precisely so this column can
+ * stop calling every one of them an error.
+ *
+ * The notes are the reason this column is worth its width. A row that says
+ * *done · 4 rows* proves the queue ran; a row that says *3 shots · asl 2.13 ·
+ * metronomic* proves it measured something, and it is the only place in the app
+ * where a pass's own findings are visible without opening the reel.
+ */
+function JobDetail({ job }: { job: EngineJob }) {
+  const reason = job.reason || job.error || '';
+  const notes = job.notes
+    ? Object.entries(job.notes)
+        .filter(([, v]) => v !== null && v !== undefined && v !== '')
+        .map(([k, v]) => `${k} ${typeof v === 'number' ? fmtNum(v) : String(v)}`)
+    : [];
+  const full = [reason, ...notes].filter(Boolean).join(' · ');
+  return (
+    <td className="ej-detail" title={full}>
+      {reason && <span className="ej-reason">{clip(reason, 90)}</span>}
+      {!reason && notes.length ? <span className="dim">{clip(notes.join(' · '), 90)}</span> : null}
+    </td>
+  );
+}
+
+/** Enough precision to read, not enough to pretend. `asl 2.13`, not `2.1333`. */
+const fmtNum = (n: number) =>
+  Number.isInteger(n) ? fmtCount(n) : n.toFixed(Math.abs(n) < 1 ? 3 : 2);
+
+/** The shard's own name, without the bucket directory above it. */
+const fileName = (p: string) => p.split(/[\\/]/).pop() || p;
 
 function MachinePanel({ host }: { host: HostFacts | null }) {
   if (!host) {
@@ -536,11 +592,22 @@ function SystemsSummary({ cat }: { cat: ComponentCatalogue | null }) {
           <span className="n">{fmtCount(cat.blocked)}</span>
           <span className="l">held</span>
         </div>
+        {/* How many passes have an implementation here at all. The gap between
+            this and `runnable` is what the laptop is waiting on: code, not
+            hardware. Without it the tab cannot distinguish "held for a card it
+            does not have" from "nobody has written this yet". */}
+        {cat.runners !== undefined && (
+          <div className="stat" title="passes with a runner on this machine">
+            <span className="n">{fmtCount(cat.runners)}</span>
+            <span className="l">local</span>
+          </div>
+        )}
       </div>
       {!cat.measured && (
         <div className="view-hint eng-hint">
-          The machine could not be probed, so runnability is unknown — every pass is listed as
-          ready. Hit refresh once a GPU is visible.
+          The machine could not be probed, so anything needing a GPU is listed as held on that
+          basis rather than on a reading. The {fmtCount(cat.runners ?? 0)} passes that run on the
+          CPU here are unaffected. Hit refresh once a card is visible.
         </div>
       )}
     </div>
@@ -548,6 +615,17 @@ function SystemsSummary({ cat }: { cat: ComponentCatalogue | null }) {
 }
 
 function SysRow({ c }: { c: ComponentRow }) {
+  // Three states, not two. A pass with no runner is waiting on code; a pass with
+  // a runner and a reason is waiting on a card or a library; a pass with a runner
+  // and no reason runs today. The old row collapsed the first two into `held`,
+  // which read as "your machine is too small" for twenty passes whose real
+  // status is "not written yet".
+  const waiting = c.runner === false;
+  // The chip on the right already says `no runner`. The server puts that first
+  // in the reason too — it has to, because the job table and the API show the
+  // sentence with no chip beside it — so the row drops the half it is about to
+  // repeat and keeps the clause that says something new.
+  const why = (c.reason || '').replace(/^no runner on this machine yet(\s·\s)?/, '');
   return (
     <div className={`sys-row${c.unrunnable ? ' is-held' : ''}`} title={c.summary}>
       <span
@@ -560,10 +638,16 @@ function SysRow({ c }: { c: ComponentRow }) {
         <span className={`chip-channel chip-${c.channel}`}>{c.channel}</span>
       )}
       <span className="spacer" />
+      {/* The reason, in the row rather than only in a tooltip — a hover is not
+          discoverable, and "needs 6144 MB on one card, 0 MB usable" is the
+          sentence that makes the held state actionable. Clipped generously and
+          left to the ellipsis in CSS below that: at this window it fits whole,
+          and at a narrow one the row truncates rather than reflows. */}
+      {c.unrunnable && why && <span className="sys-why dim">{clip(why, 88)}</span>}
       <span className="sys-dev">{c.device === 'gpu' ? `GPU ${fmtMB(c.vram_mb)}` : 'CPU'}</span>
       {c.unrunnable ? (
-        <span className="sys-held" title={c.reason || 'cannot run here'}>
-          held
+        <span className={waiting ? 'sys-wait' : 'sys-held'} title={c.reason || 'cannot run here'}>
+          {waiting ? 'no runner' : 'held'}
         </span>
       ) : (
         <span className="sys-ok">ready</span>

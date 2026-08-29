@@ -127,6 +127,92 @@ REQUIRES = {
 DECODES = frozenset({"probe", "artifacts", "allframes", "shots-cpu",
                      "colour", "loudness", "motion", "perframe"})
 
+# What each local pass needs to have run *first*, by local component id.
+#
+# `registry.topo_sort` gets the current ten right, and it gets them right by
+# accident. The catalogue says `cuts` needs `shots` and `motion` needs
+# `('shots', 'allframes')` — true of the plane those declarations describe, where
+# `shots` is TransNetV2 on a GPU. Sorted over those `needs`, the edge into
+# `shots-cpu` does not exist, so `cuts` is in the ready set from the first
+# iteration and the only thing keeping it behind the shot pass is the tie-break:
+# `shots-cpu` is stage 0 and its four dependents are stage 1, so the stage sort
+# happens to emit them in a working order. Measured over all 512 subsets that
+# contain `shots-cpu`, there is no case where `topo_sort` currently gets it
+# wrong.
+#
+# Which is worth stating precisely, because the accident is one field deep. Give
+# `shots-cpu` `stage=1` — the stage its own dependents have, and the value a
+# later author would reasonably pick for a pass that runs alongside them — and
+# `topo_sort` immediately emits `cuts`, `colour` and `loudness` before it, `cuts`
+# skips with *"no shots for this reel yet"* on every reel in the archive, and the
+# queue works and produces nothing. Declaring the edges means the order survives
+# that edit instead of depending on nobody making it.
+#
+# Two of these are hard and three are soft, and the soft ones matter more.
+# `cuts` raises `SkipPass` without a shot table, so getting its order wrong is
+# loud. `motion`, `perframe` and `loudness` all run perfectly happily with no
+# shots and are *wrong*: `_across_cuts` returns an empty set, the frames that
+# straddle a cut stay in the mean absolute difference series, and `motion_energy`
+# comes out 2.4× too high with nothing anywhere saying why. A silent wrong number
+# is the failure this file exists to prevent, so the soft edges are declared with
+# the hard ones and the ordering is not left to luck.
+LOCAL_NEEDS = {
+    "probe":      (),
+    "artifacts":  (),
+    "allframes":  (),
+    "shots-cpu":  (),
+    "cuts":       ("shots-cpu",),   # hard — SkipPass with no shot table
+    "motion":     ("shots-cpu",),   # soft — cut frames poison mafd without it
+    "colour":     (),               # per-frame only; reads no shot
+    "loudness":   ("shots-cpu",),   # soft — shot_level needs the spans
+    "caption":    (),               # the uploader's text; needs no decode
+    "perframe":   ("shots-cpu",),   # soft — freeze spans read the mafd series
+}
+
+
+def order(ids) -> list:
+    """`ids` in an order that satisfies every prerequisite. Deterministic.
+
+    Uses `LOCAL_NEEDS` for a component with a runner and the catalogue's own
+    `needs` for one without, so a queue holding both kinds still comes out in a
+    sane order. Ties break on (stage, id) exactly as `registry.topo_sort` breaks
+    them — two machines with the same catalogue derive the same plan, which is
+    what lets them share a coverage table without ever talking.
+
+    A prerequisite that is not in `ids` is dropped rather than added. Enqueueing
+    `cuts` alone is a legitimate thing to ask for — the shots may already be in
+    the database from Kaggle — and silently expanding one requested pass into two
+    would put a job in the queue nobody asked for. If the shots genuinely are
+    missing, `cuts` skips and says so, which is the answer.
+
+    A cycle cannot happen with the table above, and if one is ever introduced the
+    remaining ids are appended in sorted order rather than raising: a bad edge in
+    a dependency table must not stop the queue from draining.
+    """
+    want = list(dict.fromkeys(ids))
+    wanted = set(want)
+    stage = {i: (registry.BY_ID[i].stage if i in registry.BY_ID else 99, i)
+             for i in want}
+    left = {i: {n for n in _needs(i) if n in wanted and n != i} for i in want}
+    out = []
+    ready = sorted((i for i, d in left.items() if not d), key=stage.get)
+    while ready:
+        cur = ready.pop(0)
+        out.append(cur)
+        left.pop(cur, None)
+        fresh = [i for i, d in left.items() if cur in d and len(d) == 1]
+        for i in left:
+            left[i].discard(cur)
+        ready = sorted(ready + fresh, key=stage.get)
+    return out + sorted(left, key=stage.get)
+
+
+def _needs(cid: str) -> tuple:
+    if cid in LOCAL_NEEDS:
+        return LOCAL_NEEDS[cid]
+    c = registry.BY_ID.get(cid)
+    return tuple(c.needs) if c else ()
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # THE ONE COMPONENT THIS SIDE ADDS
@@ -178,18 +264,20 @@ def have() -> set:
 def blocked(ids=None, res: dict = None) -> dict:
     """Every id that cannot run here, and why. `{component_id: reason}`.
 
-    Three sources, in the order that makes the reason useful. Hardware and
-    missing libraries first, from `registry.unrunnable`, because *"no GPU in
-    this session"* is the fact worth printing for twenty passes and "write a
-    runner" would be advice that changes nothing. Then ffmpeg, which is one
-    binary standing between this machine and eight of the ten passes that do
-    work. Then the absence of a runner, last, because it is the least
-    actionable and the most likely to be true.
+    Three sources, ordered by which constraint actually binds. The absence of a
+    runner comes first for any pass this machine has no code for, because no
+    purchase and no `pip install` moves it: `shots` needs a local implementation
+    written, and until then "not installed on this machine: torch, scenedetect"
+    is a true sentence about the wrong plane. The catalogue's hardware and
+    library verdicts survive as a trailing clause on those rows, and stand alone
+    for the passes that *do* have a runner. Then ffmpeg, which is one binary
+    standing between this machine and eight of the ten passes that work.
 
     The reason matters more than the boolean. It is what the queue writes into
     the job row and what the Engine tab shows, and *"no runner on this machine
     yet"* is a sentence a user can act on — install nothing, wait — while a
-    blank `unrunnable` is not.
+    blank `unrunnable` is not, and a `pip install` that changes nothing is worse
+    than either.
     """
     ids = list(ids if ids is not None else registry.all_ids())
     out = dict(registry.unrunnable(ids, res or {}))
@@ -215,9 +303,40 @@ def blocked(ids=None, res: dict = None) -> dict:
             if cid in DECODES:
                 out[cid] = "ffmpeg is not on PATH — nothing can be decoded"
 
+    # The absence of a runner outranks whatever the catalogue said, because it is
+    # the constraint that actually binds. `shots` came back "not installed on
+    # this machine: torch, scenedetect — install them and re-queue", and the tab
+    # printed that sentence next to a chip reading *no runner*: two claims about
+    # one row that disagree, and the pip advice is the false one. Installing both
+    # libraries leaves `shots` with no code here to call — the local shot pass is
+    # `shots-cpu` — so a reason that reads as an instruction sends the user to
+    # fetch 2 GB of wheels for nothing.
+    #
+    # The catalogue's verdict is kept as a trailing clause rather than dropped,
+    # in the register of a note about the other plane instead of a thing to do.
+    # For `describe` that clause is the one that says *don't bother writing the
+    # runner either* — a 6,200 MB model was never going to fit on this card — and
+    # for `shots` it is the shopping list for whoever writes the local pass.
+    mods = registry.missing_modules(ids)
     for cid in ids:
-        if cid not in HANDLERS and cid not in out:
-            out[cid] = "no runner on this machine yet"
+        if cid in HANDLERS:
+            continue
+        prior = out.get(cid)
+        note = ""
+        if prior is not None and prior != mods.get(cid):
+            # Held on hardware: the loop in `registry.unrunnable` reached a
+            # verdict before `missing_modules` was consulted at all.
+            note = f"and it would not fit: {prior}"
+        else:
+            c = registry.BY_ID.get(cid)
+            # Only the modules that are actually absent, not the whole `requires`
+            # tuple: `tag` declares numpy, numpy is here, and "the GPU-plane
+            # build needs numpy" would invent a shortfall to explain a row whose
+            # only real shortfall is the missing code.
+            need = [m for m in (c.requires or ()) if not _importable(m)] if c else []
+            if need:
+                note = f"the GPU-plane build needs {', '.join(need)}"
+        out[cid] = "no runner on this machine yet" + (f" · {note}" if note else "")
     return out
 
 
@@ -398,7 +517,7 @@ class LocalJob(Job):
 
 
 def build_job(component_id: str, video_key: str, conn: sqlite3.Connection,
-              log=None, progress=None) -> LocalJob:
+              log=None, progress=None, cache=None) -> LocalJob:
     """Assemble everything one pass over one reel is allowed to see.
 
     Raises `SkipPass` when the reel has no file to read, which is a correct
@@ -406,6 +525,14 @@ def build_job(component_id: str, video_key: str, conn: sqlite3.Connection,
     at a video the user has since deleted is a reel this machine cannot analyse
     and will not be able to until it comes back, and marking that `failed` would
     put a permanent red row in the queue for a missing file.
+
+    `cache` is threaded through unused by all ten current runners — every one of
+    them shells out to ffmpeg and holds no weights. It is here rather than hard-
+    coded to None because the queue owns exactly one `ModelCache` for the
+    worker's lifetime, and the first pass that does load a model must find it
+    already in hand: a cache created per job is a cache that reloads the weights
+    for every reel, which is the specific failure `sizing/base.ModelCache` was
+    written to prevent.
     """
     component = registry.BY_ID.get(component_id)
     if component is None:
@@ -422,7 +549,7 @@ def build_job(component_id: str, video_key: str, conn: sqlite3.Connection,
     return LocalJob(
         video=video, component=component, store=LocalStore(conn),
         source=source, workdir=workdir, params=dict(component.params or {}),
-        resources={}, cache=None, renew=None, progress=progress, log=log)
+        resources={}, cache=cache, renew=None, progress=progress, log=log)
 
 
 def _video_row(conn: sqlite3.Connection, video_key: str) -> dict:
@@ -489,7 +616,7 @@ def _safe(key: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 
 def run(component_id: str, video_key: str, conn: sqlite3.Connection,
-        log=None, progress=None) -> dict:
+        log=None, progress=None, cache=None) -> dict:
     """Execute one pass over one reel. Never raises for an expected outcome.
 
     Returns `{"state", "reason", "tables", "notes", "seconds", "rows"}` where
@@ -518,7 +645,7 @@ def run(component_id: str, video_key: str, conn: sqlite3.Connection,
 
     try:
         job = build_job(component_id, video_key, conn, log=log,
-                        progress=progress)
+                        progress=progress, cache=cache)
     except SkipPass as exc:
         return _result("skipped", str(exc), started)
     except (KeyboardInterrupt, SystemExit):
@@ -772,7 +899,7 @@ def ensure_keys(conn: sqlite3.Connection) -> list:
     return made
 
 
-__all__ = ["HANDLERS", "MODELS", "REQUIRES", "DECODES", "SHOTS_CPU",
-           "LocalJob", "LocalStore", "blocked", "build_job", "ensure_keys",
-           "ff", "have", "install", "observer_id", "run", "signal",
-           "structure", "to_rows"]
+__all__ = ["HANDLERS", "MODELS", "REQUIRES", "DECODES", "LOCAL_NEEDS",
+           "SHOTS_CPU", "LocalJob", "LocalStore", "blocked", "build_job",
+           "ensure_keys", "ff", "have", "install", "observer_id", "order",
+           "run", "signal", "structure", "to_rows"]

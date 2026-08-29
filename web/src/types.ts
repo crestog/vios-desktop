@@ -654,15 +654,34 @@ export interface LocalVideo {
 }
 
 /** `/api/engine/stats` */
+/**
+ * `/api/engine/stats` — the queue's counts, per state, plus what the worker is
+ * doing right now.
+ *
+ * Seven states rather than the two the queue shipped with, because collapsing
+ * them makes the strip unreadable as a report. A reel with no audio track and a
+ * reel whose audio decoder crashed are not the same event: *4,800 done, 200
+ * skipped* is a finished sweep, and *4,800 done, 200 failed* is an unsolved
+ * problem.
+ */
 export interface EngineStats {
   pending: number;
   running: number;
   completed: number;
+  /** Ran, correctly declined: no audio track, no shots yet, nothing to measure. */
+  skipped: number;
+  /** Asked to be retried later; `not_before` says when. Not an error. */
+  deferred: number;
   failed: number;
+  /** Cannot be hosted here at all — no GPU, no library, no runner. */
   unrunnable: number;
   current_job?: EngineJob | null;
   running_worker: boolean;
   paused: boolean;
+  /** Component ids with an implementation on this machine. */
+  runners?: number;
+  /** Evidence rows imported but not yet in the search index. */
+  index_pending?: number;
 }
 
 export interface EngineJob {
@@ -671,7 +690,25 @@ export interface EngineJob {
   component_id: string;
   state: string;
   attempts?: number;
+  /**
+   * Why the job is in the state it is, whatever that state is — the exception
+   * for a failure, the explanation for a skip, the shortfall for a held pass.
+   * Prefer this over {@link EngineJob.error}: four of the five terminal states
+   * are not errors, and the server sends the same string under both names.
+   */
+  reason?: string;
+  /** @deprecated The column's shipped name. `reason` is the same string. */
   error?: string | null;
+  /** The pass's own findings — `{shots: 3, asl: 2.13, rhythm: 'metronomic'}`. */
+  notes?: Record<string, unknown> | null;
+  /** Evidence rows produced. 0 is a real answer: it ran and measured nothing. */
+  rows?: number | null;
+  /** Path of the shard holding those rows, under `paths.SHARD_DIR`. */
+  shard?: string | null;
+  /** A deferred job is not eligible until this epoch second. */
+  not_before?: number | null;
+  /** Live progress line while the pass is running; only on `current_job`. */
+  detail?: string;
   created_at?: number;
   started_at?: number | null;
   finished_at?: number | null;
@@ -714,6 +751,15 @@ export interface ComponentRow {
   summary: string;
   produces: string[];
   kinds: string[];
+  /**
+   * Whether an implementation of this pass exists on this machine at all.
+   *
+   * A different question from {@link ComponentRow.unrunnable}, and the two
+   * together are what the row means: no runner is waiting on code, a runner plus
+   * a reason is waiting on hardware or a library, and a runner with no reason
+   * runs today.
+   */
+  runner?: boolean;
   unrunnable: boolean;
   /** Why it cannot run here, or null when it can. */
   reason: string | null;
@@ -726,6 +772,8 @@ export interface ComponentCatalogue {
   total: number;
   runnable: number;
   blocked: number;
+  /** How many of `total` have an implementation on this machine. */
+  runners?: number;
   defaults: number;
   components: ComponentRow[];
 }
