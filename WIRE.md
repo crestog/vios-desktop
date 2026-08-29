@@ -28,7 +28,7 @@ including the upstream SHA it was verified against.**
 | `atlas/*.py` (15 files, ~11,900 lines) | `atlas/*.py` | `config.py` rewritten for one disk; `ingest.py` scan made incremental; `media.py` eviction replaced by a free-space floor; `reflect.py` excludes two derived tables from the text index |
 | `capture/*.py` (12 files, ~5,870 lines) | `vios/capture/*.py` | 3 import rewrites only (`vios.creds`→`creds`, `vios.tgcompat`→`tgcompat`, `vios.process.intake`→`.mtproto`) |
 | `capture/mtproto.py` | `vios/process/intake.py` lines 278–473, class `Channel` | header rewritten, class verbatim; trimmed at 209 lines (the extraction had over-run into `class Source:`); `SourceError` defined locally (upstream `intake.py:57`, outside the copied range); one function-local `from vios.tgcompat import patch` at `:59` rewritten — the copy script only rewrote top-level imports, and without it every MTProto call dies `Peer id invalid` |
-| `sizing/registry.py` | `vios/process/registry.py` | unchanged |
+| `sizing/registry.py` | `vios/process/registry.py` | catalogue list byte-identical; three functions added — `register()` (so a laptop-only pass joins the catalogue from outside the list, keeping the two copies comparable line for line), `missing_modules()` (thirty-one components declare a `requires` tuple *"importable module names, for preflight"* and nothing read it, so the Engine tab printed **ready** for `transcribe` on a machine with no `faster_whisper`), and `unrunnable()` now appends a missing-library reason **last**, after the hardware reasons — on a machine with no GPU, "no GPU in this session" is the useful fact and "install torch" would be advice that changes nothing |
 | `sizing/resources.py` | `vios/process/resources.py` | `_system_ram_mb()` gained a Windows path; `total_ram_mb()` added |
 | `sizing/base.py` | `vios/process/runners/base.py` | unchanged |
 | `sizing/__init__.py` | `vios/process/__init__.py` (`SCHEMA_VERSION`, `CHANNELS` only) | reduced to the two constants |
@@ -43,7 +43,8 @@ including the upstream SHA it was verified against.**
 
 | Here | What it is |
 |---|---|
-| `paths.py` | The one place that decides where anything lives. Honours `VIOS_LOCAL_HOME`. |
+| `paths.py` | The one place that decides where anything lives. Honours `VIOS_LOCAL_HOME`. `SHARD_DIR` (`<HOME>/shards`) is new: shards this machine wrote are kept rather than scratched, because they are the only replayable record of a local pass and `import_local_shard` defaults to `keep=True`. |
+| `runners/` | The three modules that actually run a pass here — `ff.py`, `signal.py`, `structure.py` — plus `install()`, which registers **`shots-cpu`** into the copied catalogue at import. `shots-cpu` has no upstream counterpart: the processing plane detects shots on a GPU, and `ffmpeg/scdet` is what a laptop has. It is stage 0, and `cuts`, `motion`, `colour` and `loudness` read its shots. Three declared kinds are deliberately **withheld** rather than approximated — `camera_move` ("needs optical flow — mafd has no direction"), `stability` ("1−CV(mafd) inverts: it measures stillness, not shake") and `sharpness_mean` ("needs pixel gradients"). Each is reported in the run's `not_emitted` note, so a missing kind is a stated refusal and not a silent gap. |
 | `studio.py` | The archive read as craft: how was this made, and what do the ones that work have in common. `deconstruct(key)` finds a reel's sections by change-point segmentation over its channel mix, `patterns(scope)` reports the distributions across many reels and ranks opening phrases by log-odds with an informative Dirichlet prior, `script_draft(scope)` turns both into a beat sheet where every number is a median of real reels and every line cites the reel and timecode it came from. **No model is called anywhere in it**, and nothing is stored — every answer is derived on read and cached against a fingerprint of the tables it read, so a scan or a re-index invalidates it and no answer can outlive its data. |
 | `server/app.py` | **One** FastAPI app. Adopts `atlas.server`'s, `capture.routes`'s, `server.desktop_routes`'s and `server.admin_routes`'s finished `/api/*` route objects onto a single router (51 + 23 + 28 + 7 = 109), leaving both old frontends behind, and serves `web/dist` with an SPA fallback so `/watch/<key>?t=` is a real cold-loadable link. Replaces upstream `ui_server.py:940`'s `app.mount("/atlas", _atlas_server.app)`, which was a whole second FastAPI instance. |
 | `server/desktop_routes.py` | The 28 routes with no upstream counterpart: mirror worker, local library, engine queue, derived artefacts (poster tiers, sprite sheet, keyframes), disk and host, and the three `/api/studio/*` that expose `studio.py`. |
@@ -52,7 +53,7 @@ including the upstream SHA it was verified against.**
 | `desktop/__main__.py` | The window: credentials → uvicorn on a free port → `webview.create_window`. |
 | `VIOS.bat`, `backup.bat` | Launch, and `git bundle` (there is no remote). |
 
-### Two upstream defects fixed here, worth carrying back if that repo is ever touched
+### Three upstream defects fixed here, worth carrying back if that repo is ever touched
 
 1. **`creds.export_to_env()` never read the local credential file.** `save_local()`
    has always written `~/.vios/credentials.json` and nothing ever exported it, so on
@@ -68,6 +69,14 @@ including the upstream SHA it was verified against.**
    That one is upstream's and was invisible because it only appears once a map has
    been built and nothing read the log line that said so. Both are now in
    `reflect._ATLAS_OWN`.
+3. **`store.py:export_shard` declares no schema in its header.** Its header is a set
+   of id ranges — the shard's *provenance* — and carries no `tables` map, so a reader
+   that wants to know what a column is has only the values in front of it. A column
+   that is NULL in every row of a shard is therefore invisible: not declared, not
+   created, and silently absent on the far side until some later shard happens to
+   carry a value for it. `shardwriter._DECLARED_TYPES` is the fix on this side and it
+   is nine lines; the reader half is `ingest.replay_shard`'s `declared` parameter.
+   Both are described under the wire format below.
 
 ### What was deliberately **not** copied
 
@@ -91,10 +100,27 @@ from the old folder, not files that moved.
 gzip, newline-delimited JSON. Line 1 is a header; every later line is a row.
 
 ```jsonc
+// written here, by shardwriter.py
 {"_": "vios-evidence-shard", "schema": 3, "session": "...", "at": 1786219385.7,
  "tables": {"claim": {"columns": {...}, "keys": [...]}, ...}}
 {"t": "claim", "video_key": "...", "kind": "...", "value": "...", ...}
 ```
+
+```jsonc
+// written upstream, by store.py:export_shard — no `tables`, no `session`
+{"_": "vios-evidence-shard", "schema": 3, "component": "transcribe",
+ "lo_id": 0, "hi_id": 4210, "lo_vec": 0, "hi_vec": 0,
+ "lo_fvec": 0, "hi_fvec": 0, "lo_fmet": 0, "hi_fmet": 0, "at": 1786219385.7}
+```
+
+Only the magic string is common to both, which is the one thing `read_shard`
+requires. Everything else in the header is advisory and the reader must treat a
+missing key as "not stated": **an upstream shard declares no columns at all**, so
+for those the reader still has nothing but the values, and a column NULL in every
+row of the shard is dropped exactly as described under property 1 below. It is
+bounded rather than fatal, because upstream fills `t0`/`t1` on every claim and the
+next shard that carries a value `ALTER TABLE … ADD COLUMN`s it — but it is the same
+defect on the other side of the wire, and it is the first thing to carry back.
 
 Three properties make this safe across two independently-evolving repositories,
 and they are the reason separating them was cheap rather than reckless:
@@ -104,6 +130,25 @@ and they are the reason separating them was cheap rather than reckless:
    (`atlas/ingest.py:634`) takes the declaration from the shard and
    `ALTER TABLE … ADD COLUMN`s anything it has not seen. So *additive* drift, the
    likely kind, is absorbed with no coordination at all.
+
+   **This was aspirational until it was measured.** Both sides used to infer the
+   declaration from the values in front of them — the writer built the header from
+   its rows (`shardwriter._build_table_meta`) and the reader parsed that header,
+   discarded it, and re-inferred from the same rows a second time
+   (`ingest.replay_shard`). A column that is NULL in every row of one shard was
+   therefore declared by nobody and created by nobody. That is not an edge case,
+   it is the *first* shard: a reel whose shot pass has not run emits whole-reel
+   claims with `shot_idx`, `t0`, `t1`, `frame_idx` and `frame_hi` all empty, and
+   all five were dropped — leaving a `claim` table with no time column and no link
+   to `shot`, the one shape from which no moment can ever be placed on a timeline.
+   The writer now states the types it knows from the schema it builds rows against
+   (`shardwriter._DECLARED_TYPES`, restricted to columns the rows actually carry,
+   so the header stays a true description of the payload), and the reader falls
+   back to the declared type **only** when the values teach nothing. `_sql_type`
+   is still right to refuse to default an empty column to TEXT — a `duration`
+   typed TEXT on a null then stores a later shard's `30.0` as the string
+   `"30.0"`, which does not compare and blanks the moment ribbon — but a *stated*
+   type is neither a guess nor a default.
 2. **Forward-tolerant to truncation.** `read_shard()` (`atlas/ingest.py:604`)
    validates only the magic string. A shard torn by a session that died
    mid-upload is explicitly not an error: every line before the tear is still
@@ -120,7 +165,16 @@ and they are the reason separating them was cheap rather than reckless:
    number no longer matching the constant in the tree, meaning the contract
    document was not updated with the code.
 
-**Writer here:** `shardwriter.py`. **Reader here:** `atlas/ingest.py:import_shard`.
+**Writer here:** `shardwriter.py`. **Reader here:** `atlas/ingest.py:import_shard`
+for a shard off the channel, `import_local_shard` for one this machine wrote.
+The local path exists because `import_shard`'s first act is
+`tgchannel.fetch_document`, so before it the only way a locally-produced shard
+could reach the reader was to upload it and download it back — on a laptop meant
+to work with the channel unreachable, that is not a slow path but no path. A
+locally-replayed shard is recorded in `bundles` with `seq` prefixed **`local:`**
+and `manifest_id = NULL`, because there is no channel message behind it; that
+`NULL` is what lets the Sources view separate evidence this machine produced from
+evidence it received.
 **Writer upstream:** `vios/process/store.py:export_shard` (`:1095`), header at
 `:1143`. **Reader upstream:** `vios/process/intake.py:restore_shards` (`:679`).
 
@@ -142,6 +196,148 @@ rebuild the ledger from the channel, which is what makes "never re-download afte
 months or years" survive the loss of any local database. Both sides must keep
 writing it. `capture/upload.py:build_caption` is the writer;
 `capture/seed.py:parse_caption` is the reader.
+
+---
+
+## What the evidence means once it lands
+
+### The evidence schema has four live shapes
+
+`ensure_schema` widens and never renames, and both sides have been writing for
+longer than either has been reading, so `claim` exists in several shapes at once.
+These four are real, and the times each one resolves to were **measured**, not
+assumed:
+
+| | `claim` columns | `time_columns` | borrows from `shot` |
+|---|---|---|---|
+| **fresh / shard replay** — all a new machine has | `uid, video_key, shot_idx, channel, kind, value, num, confidence, observer_id, ordinal, created_at` | `('', '')` | **yes** — this shape has no time of its own at all |
+| **local** — what a `runners/` shard now declares | the above **plus `t0, t1, frame_idx, frame_hi`** | `('t0', 't1')` | **yes, per row** — `t0` is filled only for a frame claim |
+| **production** — `vios/process/store.py:154` | same as local, plus `id INTEGER PRIMARY KEY` (dropped on export) | `('t0', 't1')` | yes, but nothing is left to borrow |
+| **early fixture** — this laptop's `atlas.db`, widened by import | `uid, video_key, kind, name, confidence, t0, t1` + `channel, value, num, observer_id, ordinal, created_at` | `('t0', 't1')` | no — it has no `shot_idx` |
+
+`shot` is `video_key, idx, t0, t1, score, detector, keyframe` everywhere except
+the early fixture, which calls the boundary confidence `scene_score` and has
+neither `detector` nor `keyframe`.
+
+Three consequences, all of which have already cost real answers:
+
+- **Probe the columns, never assume them.** `studio._columns` runs `PRAGMA
+  table_info` per read and picks `value` or `name`, `score` or `scene_score` or
+  `NULL`. It is deliberately uncached: the first shard to reach a table widens it
+  mid-process, so a set memoised at import would be the pre-widening answer for
+  the life of the app. And `studio._rows` swallows `sqlite3.Error`, logs at DEBUG
+  and returns `[]` — so a wrong column name does not raise, it answers `ok: True`
+  with zeros. There is no error to notice; the only symptom is an empty Studio
+  over a table holding three shots and thirty-seven claims.
+- **A column existing is not a row having a value in it.** Branching on the
+  *schema* is right only while each shape means one thing, and the header repair
+  ended that: `claim` now always has `t0`/`t1`, and a per-shot or whole-reel claim
+  leaves both NULL. Two places read the schema and believed it — `reflect.time_link`
+  returned early on *"the row already knows its own span"*, and `studio._claims`
+  chose one of three queries off the column list — and both dropped the shot join
+  for exactly the rows that needed it. Both now resolve per row with `COALESCE`.
+  Anything new that reads these tables must do the same.
+- **`artifact` carries `path`, and it is local-only in meaning.** A local artefact
+  row records where the file is on this disk, which is harmlessly ignorable on the
+  other side. It is not ignorable here: `paths` decides where anything lives, and
+  an `artifact.path` written under a different `VIOS_LOCAL_HOME` will not resolve.
+
+**The header's `keys` list is written and read by nobody.** `shardwriter` computes
+it, and neither reader applies it: this side measures the real key from the values
+(`ingest._dedup_columns`, which requires the key to contain an identifier so a
+narrow sample's accidentally-unique `idx` cannot become an archive-wide index), and
+upstream restores into its own fixed schema. Leave it that way. Honouring the
+declared keys would hand `artifact` the key `["video_key"]` — every unique-index
+insert after the first would then collapse a reel's five artefacts into one.
+
+### How a moment gets a time
+
+`moments.t_start` is what makes a search hit seekable and what the Studio timeline
+is drawn from. There is no single column it comes from, and the resolution order
+is a contract:
+
+1. **The row's own start**, by name — `reflect.time_columns` matches a normalised
+   name against `_START_NAMES` / `_END_NAMES`. `frame_t`/`frame_t1` are on those
+   lists and matched **last**, so a table carrying both a real span and a frame
+   stamp keeps the span: `t0` is what the row is about, `frame_t` is where it was
+   sampled. Both writers currently rename `frame_t` to `t0` before storage
+   (`runners/__init__.py:780`, upstream `store.py:832`), so no table declares that
+   column today and the two names are defensive — one line in one writer is all
+   that separates the raw name from reaching a table, and recognising it costs
+   nothing. `frame_idx` and `frame_hi` are deliberately **not** on the lists: they
+   are frame numbers, and a moment at t=142s because it was frame 142 is worse than
+   one with no time at all.
+2. **Otherwise the shot the row points at** — `reflect.time_link` LEFT JOINs
+   `shot` on `(video_key, shot_idx)` and takes `COALESCE(t.t0, s.t0)`. The join is
+   by that one exact name: a generic *"any `*_idx` points at a table"* rule would
+   happily join `ordinal` or `frame_idx` and put moments at the wrong second. The
+   end comes from the shot **only when the start did**, so a point claim with no
+   end of its own is not stretched across the shot it happens to fall in. This is
+   the step that carries the fresh shard-replay shape, which has no time column at
+   all — 87 of 87 moments with a NULL `t_start` before it existed.
+3. **Otherwise NULL, and NULL means *whole reel*** — never second zero. A caption
+   describes the video, not its first frame. Everything downstream must keep the
+   two apart: `studio._moments` carries a `timed` flag, `_timeline` lists only
+   channels with a placed moment, `_channels.first_at`/`last_at` and
+   `hook.silent_open` are nullable, and `patterns()` drops an untimed reel from
+   the opening-rate denominator and reports it as `hook.untimed` instead. Reading
+   NULL as `0.0` — which is what used to happen — fabricates a section on an
+   all-zero occupancy matrix, asserts a reel opens silent when nothing in it was
+   ever placed, and counts whole-reel caption text as hook language.
+
+**The two writers disagree about step 3, and this side is the strict one.**
+Upstream always fills `t0`/`t1`: from `frame_t` if the claim has one, else from the
+shot, else from `whole` — the video's entire span (`store.py:831`). So a whole-reel
+claim arrives from Kaggle at `0 .. duration`, indistinguishable from an observation
+that genuinely covers the reel. `runners/__init__.py:780` writes only the frame
+stamp and leaves both NULL, so locally the distinction survives into
+`moments.t_start` and Studio can tell *"we know nothing about when"* from *"this
+lasts the whole reel"*. Nothing may reintroduce the flattening on this side; when
+imported evidence is being judged, remember its zeros may not be zeros.
+
+Of two identical texts for one video and channel, the **placed** one wins.
+`moments` is `UNIQUE(video_key, source, text_hash)` written with `INSERT OR
+IGNORE`, so the first insert survives; `index.build_passages` therefore emits
+timed passages before untimed and drops an untimed string a placed passage already
+carries. This is load-bearing because a pass legitimately emits the same value
+twice — `runners/signal.py:296` claims `motion_energy` for the whole reel and
+`:306` claims it again per shot, both reading `gentle` — and the timeline used to
+get the copy that could not seek.
+
+**`reflect._RULES_VERSION` is part of the index fingerprint.** Hashing only the
+schema is right while fixed rules are read against moving tables and backwards the
+moment the rules move: every fix above would have shipped inert on exactly the
+machines that had the defect, their `moments` table already built and their schema
+unchanged. Bump it when anything that turns the schema into moments changes, and
+one rebuild happens on next boot without anyone knowing they had to ask.
+
+**A known rough edge, left alone deliberately.** `build_passages` merges short
+adjacent rows so a transcript reads as sentences, and a channel whose claim values
+are single banded words gets merged too — three consecutive `still` readings
+become the passage `still still still`. It is not wrong, exactly: those really are
+three observations. But it is not a sentence either, and it makes such a passage
+match a search for `still` three times over. Fixing it means deciding per channel
+whether a value is prose or an enum, which is a tuning question and not a defect,
+so it is written down rather than guessed at.
+
+### Seven job states, five of them terminal
+
+`local_jobs.state` is `pending`, `running`, `completed`, `skipped`, `deferred`,
+`failed` or `unrunnable`. **Four of the five terminal states are not errors**, and
+treating them as two — done or broken — is how a re-queue used to walk straight
+past the work it was asked to redo. `skipped` is a pass that correctly declined
+(no audio track, no shots yet), `deferred` is one waiting on a dependency,
+`unrunnable` is one this hardware or this install cannot host at all
+(`registry.unrunnable`, which now includes a missing library), and `failed` is the
+only one that means something went wrong. A run that ends
+`completed=27, skipped=2, failed=1, unrunnable=2` is a healthy run.
+
+The table name is local-only: this side keeps its queue in `paths.JOBS_DB`, never in
+`atlas.db`, so a job record cannot be mistaken for evidence and no shard carries
+one. What a pass *learned* travels; what a machine *did* does not. The one exception
+is upstream's `coverage` table, which travels precisely so a database rebuilt from
+shards does not re-attempt three hours of work whose evidence it already holds
+(`store.py:_settled_coverage`).
 
 ---
 

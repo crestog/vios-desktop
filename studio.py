@@ -636,12 +636,23 @@ def _claims(conn: sqlite3.Connection, key: str) -> list[dict]:
     """Named entities the pipeline was willing to assert.
 
     The text column is `value` on a database built by shard replay and `name` on
-    the early fixture's, and the canonical table has no `t0`/`t1` — a claim is
-    scoped to a shot by `shot_idx` instead, so its span comes from the shot. That
-    join is what keeps a claim clickable on the timeline; without a time the
-    button below it would seek to zero for everything. When neither times nor a
-    shot index exist the claim is returned with `t0`/`t1` as null, which the
-    interface renders as *whole reel* rather than as second zero.
+    the early fixture's. Times are three-way: a claim may carry its own `t0`/`t1`,
+    or be scoped to a shot by `shot_idx` with the seconds living on `shot`, or
+    carry neither because it is about the whole reel. All three arrive in one
+    table, so the resolution is per row and not per schema — `COALESCE` over a
+    LEFT JOIN, exactly what `reflect.time_link` does for the search index.
+
+    Choosing the branch off the *columns* was a bug the moment the shard header
+    began declaring `t0`/`t1` on every `claim` table it creates: the table has the
+    columns and most rows leave them NULL, so *"it has t0, use t0"* read a per-shot
+    claim as untimed and dropped the join that was the whole point of `shot_idx`.
+    That join is what keeps a claim clickable on the timeline; without a time the
+    button below it would seek to zero for everything. A claim with no times and no
+    shot is returned with `t0`/`t1` as null, which the interface renders as
+    *whole reel* rather than as second zero.
+
+    The end is borrowed only when the start was, so a point claim that happens to
+    fall inside a shot is not stretched across it.
 
     Note for anyone who profiles this: there is no index on `claim(video_key)`
     (only `claim(uid)` is unique), so this is a scan. It is one scan of a small
@@ -651,10 +662,20 @@ def _claims(conn: sqlite3.Connection, key: str) -> list[dict]:
     txt = "value" if "value" in cols else ("name" if "name" in cols else None)
     if txt is None:
         return []
-    if "t0" in cols and "t1" in cols:
+    own = "t0" in cols and "t1" in cols
+    link = "shot_idx" in cols and "idx" in _columns(conn, "shot")
+    if own and link:
+        sql = (f'SELECT c.kind, c."{txt}", c.confidence, '
+               "  COALESCE(c.t0, s.t0), "
+               "  CASE WHEN c.t0 IS NULL THEN s.t1 ELSE c.t1 END "
+               "FROM claim c LEFT JOIN shot s "
+               "  ON s.video_key = c.video_key AND s.idx = c.shot_idx "
+               "WHERE c.video_key = ? "
+               "ORDER BY COALESCE(c.t0, s.t0, 0), c.ordinal")
+    elif own:
         sql = (f'SELECT kind, "{txt}", confidence, t0, t1 FROM claim '
                "WHERE video_key = ? ORDER BY COALESCE(t0, 0)")
-    elif "shot_idx" in cols and "idx" in _columns(conn, "shot"):
+    elif link:
         sql = (f'SELECT c.kind, c."{txt}", c.confidence, s.t0, s.t1 '
                "FROM claim c LEFT JOIN shot s "
                "  ON s.video_key = c.video_key AND s.idx = c.shot_idx "

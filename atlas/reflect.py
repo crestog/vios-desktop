@@ -59,16 +59,23 @@ _START_NAMES = ("startt", "startsec", "starttime", "tstart", "start",
                 "offset", "position", "t0", "framet")
 _END_NAMES = ("endt", "endsec", "endtime", "tend", "end", "stop", "until",
               "t1", "framet1")
-# `frame_t` / `frame_t1` are last on purpose, and they are here because their
-# absence was silently costing every timed moment in the index. The evidence
-# store stamps a frame claim with the frame it starts on *and* the presentation
-# timestamp that frame was decoded at — `frame_t`, in seconds — and that is the
-# only time a speech segment, an OCR run or a frame note carries: the canonical
-# `claim` table has no `t0`/`t1` at all. Without these two names `time_columns`
-# returned `("", "")` for `claim`, so the indexer read every row as untimed,
-# `moments.t_start` came out NULL for all 87 of them, and a search hit could not
-# seek because nothing knew when it happened. Only the early fixture's schema,
-# which nothing writes anymore, was ever timed.
+# `frame_t` / `frame_t1` are here for the shape that carries a frame claim's own
+# stamp under its own name. A pass stamps a frame observation with the frame it
+# starts on *and* the presentation timestamp that frame was decoded at — see
+# `sizing/base.py:frame_claim` — and both writers currently rename those to
+# `t0`/`t1` on the way to storage (`runners/__init__.py:780`, and upstream
+# `vios/process/store.py:832`), so no table on either side declares a `frame_t`
+# column today. Measured, not assumed: the four live `claim` shapes resolve to
+# `('','')`, `('t0','t1')`, `('t0','t1')` and — for a table built straight from
+# `frame_claim` payloads — `('frame_t','frame_t1')`. These two names are what
+# make that fourth case placeable instead of untimed, and the renaming is one
+# line in one writer, so recognising the raw name costs nothing and removes a
+# whole class of silent regression.
+#
+# The shape that actually had no time is the first one: a `claim` table built by
+# shard replay with no `t0`/`t1` columns at all. No name can fix that, and
+# `time_link` below is what does — it borrows the span from the shot the row
+# points at.
 #
 # Last rather than first so a table carrying both a plain span and a frame stamp
 # keeps the span: `t0` is what the row is about, `frame_t` is where it was
@@ -502,20 +509,21 @@ def time_link(conn: sqlite3.Connection, table: str, cols: list,
               key: str, start: str = "", end: str = "") -> dict:
     """Times a table can borrow from the shot each row points at, or {}.
 
-    The canonical evidence schema keeps no `t0`/`t1` on `claim`: a claim is
-    placed by `shot_idx`, and the seconds live on `shot`. Without this the
-    indexer reads every per-shot observation as untimed — on a database built
+    A `claim` table built by shard replay has no `t0`/`t1` columns at all: the
+    claim is placed by `shot_idx` and the seconds live on `shot`. Without this
+    the indexer reads every per-shot observation as untimed — on a database built
     entirely by shard replay, which is the only thing a new machine has, that
     was 87 of 87 moments with a NULL `t_start` and a Studio timeline with
     nothing on it. `studio._claims` does this same join to keep an entity
     clickable; doing it here is what makes a *search hit* seekable.
 
     When the table has a start of its own, the shot is a fallback rather than a
-    replacement — `COALESCE(frame_t, s.t0)` — because the two coexist in
-    production: a speech segment carries the timestamp of the frame it was
-    decoded at, and a shot-level loudness reading carries only its shot. The end
-    is taken from the shot *only* when the start was, so a point claim with no
-    `frame_t1` is not stretched across the whole shot it happens to fall in.
+    replacement — `COALESCE(t.t0, s.t0)` — because a column existing is not a row
+    having a value in it. The local writer fills `t0`/`t1` only for a frame claim
+    and leaves them NULL for a per-shot or whole-reel one, and since the shard
+    header declares the columns either way, the same table holds both. The end is
+    taken from the shot *only* when the start was, so a point claim with no end of
+    its own is not stretched across the whole shot it happens to fall in.
 
     Returns `{"join", "start", "end", "via", "via_end"}` — the first three SQL
     fragments against alias `t`, the last two the plain-language origin the
