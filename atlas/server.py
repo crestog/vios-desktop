@@ -90,13 +90,21 @@ def _index_if_stale(conn: sqlite3.Connection, force: bool = False) -> bool:
     # The graph is derived from the same schema the index just read, so the
     # moment it can go stale is the moment the index does. Rebuilding it here
     # rather than on demand is what keeps opening the Graph tab instant.
+    _boot_set(detail="deriving the relationship graph")
     _rebuild_graph(conn)
     return True
 
 
 def _rebuild_graph(conn: sqlite3.Connection) -> None:
-    """Derive the graph. Never fatal — Atlas without a graph is still Atlas."""
-    _boot_set(phase="indexing", detail="deriving the relationship graph")
+    """Derive the graph. Never fatal — Atlas without a graph is still Atlas.
+
+    Deliberately says nothing about the boot phase. Both callers inside `_boot`
+    announce their own, and `_BOOT` has no way back to `ready` once something
+    sets it to `indexing`, so a post-boot caller — `/api/reindex` is one — that
+    announced through here would leave `/api/status` reporting the app as
+    mid-boot for as long as the process lives, and the interface would keep
+    showing the boot banner over a database that finished indexing.
+    """
     try:
         graph.rebuild(conn)
     except Exception as e:                                  # noqa: BLE001
@@ -202,6 +210,7 @@ def _boot() -> None:
     # seconds and only happens when there is genuinely nothing stored.
     try:
         if not graph.counts(conn)["nodes"]:
+            _boot_set(phase="indexing", detail="deriving the relationship graph")
             _rebuild_graph(conn)
     except Exception as e:                                  # noqa: BLE001
         log(f"graph check failed — {type(e).__name__}: {e}", "WARN")
@@ -543,9 +552,18 @@ def api_scan(full: bool = True, max_messages: int = 0,
 
 @app.post("/api/reindex")
 def api_reindex(embed: bool = True):
+    """Rebuild the moment index — and the graph derived from the same rows.
+
+    The graph is a projection of the claims the index just re-read, so leaving it
+    alone here would answer *"reindexed"* while the Graph and Roadmap tabs still
+    describe the previous state. Boot does both together (`_index_if_stale`), the
+    engine does both when its sweep goes quiet (`engine_queue._regraph`), and this
+    is the third door into the same pair.
+    """
     result = index.rebuild(db(), embed=embed)
     if result.get("ok"):
         search.clear_cache()
+        _rebuild_graph(db())
     return result
 
 

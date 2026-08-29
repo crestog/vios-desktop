@@ -715,6 +715,41 @@ def _reindex(conn: sqlite3.Connection, idle: bool = False) -> None:
         SUB)
     _DIRTY_ROWS = 0
     _INDEX_NEXT_TRY = 0.0
+    if idle:
+        _regraph(conn)
+
+
+def _regraph(conn: sqlite3.Connection) -> None:
+    """Re-derive the relationship graph after the sweep's index rebuild.
+
+    The graph reads the same claims the index just read, so it goes stale at
+    exactly the moment the index does — and it has no dirty counter of its own to
+    notice. Boot rebuilds both together (`atlas/server.py:89-93`); the engine
+    rebuilt only the index, so a first local sweep left the Graph tab saying *no
+    relationships found in this database* over a library it had just finished
+    processing, until someone pressed rebuild by hand. Measured on three reels:
+    88 claims indexed, graph 0 nodes, then 35 nodes and 63 edges from one manual
+    POST with nothing else changed.
+
+    Idle only, unlike the mid-sweep text rebuild. This is derivation from rows
+    already written, not new evidence, and doing it between jobs would redo the
+    whole graph every `INDEX_EVERY` rows for a result nobody can see until the
+    sweep ends.
+
+    Never fatal, for the same reason boot's copy is not: an archive with a stale
+    graph is still searchable, still playable, still every other tab.
+    """
+    try:
+        from atlas import graph                                  # noqa: PLC0415
+        out = graph.rebuild(conn)
+    except Exception as e:                                       # noqa: BLE001
+        log(f"graph rebuild raised — {type(e).__name__}: {e}", SUB, "WARN")
+        return
+    if out.get("ok"):
+        log(f"graph rebuilt — {out.get('nodes', 0)} node(s), "
+            f"{out.get('edges', 0)} edge(s)", SUB)
+    else:
+        log(f"graph rebuild skipped — {out.get('note') or 'unknown'}", SUB)
 
 
 # ══════════════════════════════════════════════════════════════════════════
