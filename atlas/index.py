@@ -277,11 +277,6 @@ def build_passages(rows: list) -> list:
 
     out = []
 
-    # Untimed text for a video is one passage per distinct string; merging
-    # captions from different rows would invent sentences nobody wrote.
-    for text in untimed:
-        out.append((None, None, text))
-
     timed.sort(key=lambda r: (r[0], r[1]))
     buf = []          # [(a, b, text)] pending merge
     buf_chars = 0
@@ -311,6 +306,23 @@ def build_passages(rows: list) -> list:
         if buf_chars >= TARGET_CHARS:
             flush()
     flush()
+
+    # Untimed text for a video is one passage per distinct string; merging
+    # captions from different rows would invent sentences nobody wrote.
+    #
+    # Emitted last, and the same string is dropped outright when a placed passage
+    # already carries it. Both halves of that matter because `moments` is
+    # `UNIQUE(video_key, source, text_hash)` and the writer is `INSERT OR IGNORE`,
+    # so of two identical texts the *first* one inserted is the one that survives
+    # — and while this loop ran first, the survivor was always the copy that
+    # cannot seek. It is not a hypothetical: a shot-scoped motion reading and the
+    # whole-reel reading of the same pass both say `gentle`, one of them at
+    # 0.0–95.0s and one of them nowhere, and the timeline got the second.
+    placed = {text for _, _, text in out}
+    for text in untimed:
+        if text not in placed:
+            out.append((None, None, text))
+
     return out
 
 

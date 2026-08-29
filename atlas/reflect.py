@@ -276,7 +276,9 @@ def cell_value(value):
     return value
 
 
-# Bumped when the rules below start reading the same schema differently.
+# Bumped when anything that turns this schema into moments starts doing it
+# differently — the name lists and `time_link` below, and `index.build_passages`,
+# which decides what a passage is and which of two identical texts survives.
 #
 # The fingerprint used to hash only the schema, which is correct as long as a
 # fixed set of rules is being applied to it — a new column changes the hash and
@@ -289,7 +291,9 @@ def cell_value(value):
 #
 # 1 → the original schema-only hash.
 # 2 → `frame_t`/`frame_t1` recognised as times; `shot_idx` borrows `shot.t0/t1`.
-_RULES_VERSION = 2
+# 3 → a placed passage now outranks an identical unplaced one, instead of losing
+#     the `INSERT OR IGNORE` race to it (`index.build_passages`).
+_RULES_VERSION = 3
 
 
 def fingerprint(conn: sqlite3.Connection) -> str:
@@ -518,8 +522,14 @@ def time_link(conn: sqlite3.Connection, table: str, cols: list,
     Admin tab prints in place of a column name — or `{}` when there is nothing
     to borrow.
     """
-    if start and end:
-        return {}                       # the row already knows its own span
+    # No early return on `start and end`. A column existing is not the same as a
+    # row having a value in it, and conflating the two is the whole family of bug
+    # this function was written to end: the shard header now declares `t0`/`t1`
+    # on every `claim` table it creates, including the tables whose every row
+    # leaves them NULL, so a guard reading "the row already knows its own span"
+    # would look at the schema, believe it, and skip the borrow for exactly the
+    # rows that need it. `COALESCE` is what decides, per row, and it decides
+    # correctly whether the column is full, empty or half of each.
     by_norm = {_norm(c["name"]): c["name"] for c in cols}
     local = by_norm.get(_SHOT_LINK)
     if not local or not key:
@@ -629,7 +639,7 @@ def text_sources(conn: sqlite3.Connection) -> list:
         if borrow:
             s_expr, e_expr = borrow["start"], borrow["end"]
             s_name = f"{start} → {borrow['via']}" if start else borrow["via"]
-            e_name = e_name or borrow["via_end"]
+            e_name = f"{end} → {borrow['via_end']}" if end else borrow["via_end"]
 
         for text_col in prose_columns(conn, table, cols):
             base = (f"SELECT t.{_q(key)}, {s_expr}, {e_expr}, "

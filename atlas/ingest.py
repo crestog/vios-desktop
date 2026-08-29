@@ -847,7 +847,8 @@ def _import_payloads(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
     return out
 
 
-def replay_shard(tables: dict, conn: sqlite3.Connection) -> tuple:
+def replay_shard(tables: dict, conn: sqlite3.Connection,
+                 declared: dict = None) -> tuple:
     """Write a parsed shard's rows into atlas.db. Returns `(merged, dropped,
     vec_bytes)`.
 
@@ -860,10 +861,17 @@ def replay_shard(tables: dict, conn: sqlite3.Connection) -> tuple:
     changes because the file came off this disk instead of out of the channel,
     and having two copies of it would be the way the two paths quietly diverge.
 
+    `declared` is the header's `tables` map — `{table: {"columns": {...}}}` — and
+    it is what makes the first sentence of that paragraph true. It was being
+    parsed and dropped: types were re-inferred from the values alone, so a column
+    that is NULL in every row of one shard did not reach the database at all. See
+    the column loop below for what that cost.
+
     Does not commit the `bundles` provenance row — that differs between the two
     callers, which is the whole of the difference between them.
     """
     merged, dropped = {}, []
+    declared = declared or {}
 
     # Payloads first, and by name rather than by shape. The generic loop below
     # still drops these columns as opaque — correctly, for what it is building —
@@ -899,6 +907,7 @@ def replay_shard(tables: dict, conn: sqlite3.Connection) -> tuple:
         for c in order:
             values[c] = [r.get(c) for r in rows]
 
+        said = (declared.get(table) or {}).get("columns") or {}
         types = {}
         for c in order:
             if _is_opaque(values[c]):
@@ -906,9 +915,25 @@ def replay_shard(tables: dict, conn: sqlite3.Connection) -> tuple:
                 continue
             t = _sql_type(values[c])
             if not t:
-                # Empty in this shard, so there is nothing to learn about it and
-                # nothing to store. Left out, not guessed at — see `_sql_type`.
-                continue
+                # Empty in this shard, so the values can teach nothing about it.
+                # The header can: the writer builds its rows from a known schema
+                # and states each column's type, which is neither a guess nor the
+                # TEXT default `_sql_type` refuses to invent — and refuses for
+                # good reason, since a `duration` typed TEXT on a null then stores
+                # a later shard's `30.0` as `"30.0"`.
+                #
+                # Taking the declaration here is what the wire format promised and
+                # was not doing. A shotless reel emits whole-reel claims with
+                # `shot_idx`, `t0`, `t1`, `frame_idx` and `frame_hi` all NULL — the
+                # normal first shard, not an edge case — and all five were dropped.
+                # A database whose first shard was one of those had a `claim` table
+                # with no time column and no link to `shot`, which is the one shape
+                # from which no moment can ever be placed on a timeline. The column
+                # arrived only if some later reel happened to fill it, and every
+                # claim written before that stayed unplaceable for good.
+                t = str(said.get(c) or "").strip().upper()
+                if t not in ("TEXT", "INTEGER", "REAL", "BLOB", "NUMERIC"):
+                    continue
             types[c] = t
         if not types:
             continue
@@ -960,7 +985,8 @@ def import_shard(info: dict, conn: sqlite3.Connection, work_dir: str) -> dict:
 
     rows_in = sum(len(v) for v in tables.values())
     _set(detail=f"{seq} — replaying {rows_in} row(s)")
-    merged, dropped, vec_bytes = replay_shard(tables, conn)
+    merged, dropped, vec_bytes = replay_shard(tables, conn,
+                                              header.get("tables"))
 
     # `counts` is what the shard *holds*, not what this run happened to add.
     # A bundle's row records its manifest's counts for the same reason: the
@@ -1033,7 +1059,8 @@ def import_local_shard(path: str, conn: sqlite3.Connection = None,
         return {"ok": False, "seq": seq, "note": f"unreadable: {exc}"}
 
     try:
-        merged, dropped, vec_bytes = replay_shard(tables, conn)
+        merged, dropped, vec_bytes = replay_shard(tables, conn,
+                                                  header.get("tables"))
         delta = ", ".join(f"{k} +{v}" for k, v in sorted(merged.items()) if v)
         held = {t: len(rows) for t, rows in tables.items()}
         conn.execute(

@@ -48,12 +48,73 @@ def _infer_type(val: Any) -> str:
     return "TEXT"
 
 
-def _build_table_meta(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+# Columns whose type is a fact about the schema, not about this batch.
+#
+# The header is a declaration of the table's shape, and the reader creates and
+# widens from it (`atlas/ingest.py:_ensure_shard_table`) — so a column the header
+# omits does not exist on the far side. Inferring the whole declaration from
+# values silently breaks that for a column that is NULL in every row of one
+# shard, which is not a rare case but the *normal* one: a reel whose shot pass
+# has not run yet emits whole-reel claims, every one of them with `shot_idx`,
+# `t0`, `t1`, `frame_idx` and `frame_hi` set to None. That shard declared none of
+# the five. A machine whose first shard is a shotless reel therefore built a
+# `claim` table with no time column and no link to `shot` at all, which is the
+# one shape from which a moment can never be placed on a timeline — the column
+# only appeared later, if some other reel happened to fill it, and every claim
+# written before that was unreachable.
+#
+# Types matter as much as presence here. SQLite would accept `shot_idx` declared
+# TEXT and then store `3` as `'3'`, and `s.idx = t.shot_idx` compares INTEGER to
+# TEXT and matches nothing — a join that silently returns no rows rather than
+# failing. So these are stated once, from the row the writer actually builds
+# (`runners/__init__.py:772`), instead of guessed from whichever value showed up
+# first.
+#
+# Only columns the rows actually carry are declared: this stays a true
+# description of the payload, not a schema the writer wishes it had.
+_DECLARED_TYPES: Dict[str, Dict[str, str]] = {
+    "claim": {
+        "uid": "TEXT", "video_key": "TEXT", "shot_idx": "INTEGER",
+        "t0": "REAL", "t1": "REAL", "channel": "TEXT", "kind": "TEXT",
+        "value": "TEXT", "num": "REAL", "confidence": "REAL",
+        "observer_id": "TEXT", "ordinal": "INTEGER", "created_at": "REAL",
+        "frame_idx": "INTEGER", "frame_hi": "INTEGER",
+    },
+    "shot": {
+        "video_key": "TEXT", "idx": "INTEGER", "t0": "REAL", "t1": "REAL",
+        "score": "REAL", "scene_score": "REAL", "detector": "TEXT",
+        "keyframe": "TEXT",
+    },
+    "artifact": {
+        "video_key": "TEXT", "kind": "TEXT", "path": "TEXT",
+        "bytes": "INTEGER", "meta": "TEXT", "created_at": "REAL",
+    },
+    "video": {
+        "video_key": "TEXT", "duration": "REAL", "width": "INTEGER",
+        "height": "INTEGER", "fps": "REAL", "has_audio": "INTEGER",
+        "bytes": "INTEGER", "added_at": "REAL", "meta": "TEXT",
+    },
+}
+
+
+def _build_table_meta(rows: List[Dict[str, Any]],
+                      table: str = "") -> Dict[str, Any]:
     """Inspect rows to determine columns, types, and candidate key."""
     if not rows:
         return {"columns": {}, "keys": []}
 
-    columns: Dict[str, str] = {}
+    present: Dict[str, None] = {}
+    for r in rows:
+        for k in r:
+            present.setdefault(k, None)
+
+    # Declared first, so a column that is None across this whole batch still
+    # reaches the reader with the right type. Ordering follows the declaration
+    # for the columns it covers and first appearance for the rest, which keeps
+    # a `CREATE TABLE` from one shard comparable with the next.
+    declared = _DECLARED_TYPES.get(table, {})
+    columns: Dict[str, str] = {c: t for c, t in declared.items()
+                               if c in present}
     for r in rows:
         for k, v in r.items():
             if k not in columns and v is not None:
@@ -105,7 +166,7 @@ def write_shard(
     total_rows = 0
     for tname, rows in tables.items():
         if rows:
-            tables_meta[tname] = _build_table_meta(rows)
+            tables_meta[tname] = _build_table_meta(rows, tname)
             total_rows += len(rows)
 
     header = {
