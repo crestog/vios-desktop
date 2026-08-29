@@ -311,6 +311,15 @@ machines that had the defect, their `moments` table already built and their sche
 unchanged. Bump it when anything that turns the schema into moments changes, and
 one rebuild happens on next boot without anyone knowing they had to ask.
 
+It is also the **only** channel a new *graph* rule has. `atlas/graph.py` keeps no
+fingerprint and no dirty counter; it is rebuilt beside the index, so the index's
+staleness test is the graph's too. `eav_pair` was added for the graph alone and the
+version was bumped for the graph alone, and that is what made an existing archive
+pick it up — measured: the fingerprint moved, the index rebuilt 87 passages, the
+graph went from 3 nodes to 10, and Atlas was ready in half a second with nobody
+pressing anything. A graph rule added without the bump reaches new archives only,
+which is the subset least likely to notice it is missing.
+
 **A known rough edge, left alone deliberately.** `build_passages` merges short
 adjacent rows so a transcript reads as sentences, and a channel whose claim values
 are single banded words gets merged too — three consecutive `still` readings
@@ -341,7 +350,7 @@ shards does not re-attempt three hours of work whose evidence it already holds
 
 ---
 
-## Two local invariants that are easy to break and expensive to notice
+## Five local invariants that are easy to break and expensive to notice
 
 ### The scan cursor may only advance across ground it actually covered
 
@@ -378,6 +387,86 @@ measures free space against `paths.FREE_FLOOR_GB`, logs once per transition, and
 more of the same videos turns "my archive is safe" into "which ones did it drop?",
 and that question has no answer worth the gigabytes. Reclaiming space is a user
 action in Admin.
+
+### The shared connection hands out tuples, and a named-column read must say so
+
+`ingest.connect()` deliberately leaves `row_factory` unset, and `server.db()` hands
+that one connection per thread to every reader in the application. Most of them are
+written for tuples — `reflect.columns` builds its dicts from `r[1]`/`r[2]`,
+`studio._rows` returns rows raw — so the factory cannot be flipped on the
+connection without changing the shape of rows under readers that never asked.
+
+A module that wants `r["video_key"]` therefore sets the factory **on its cursor**.
+`vsearch.frame_rows` hit this first and settled it that way; `atlas/maps.py` had it
+wrong in eight of its nine readers, every one of which raised `TypeError: tuple
+indices must be integers` against any database with rows in it — the whole Data
+tab. It read as working because a map needs the encoder, the encoder needs torch,
+and the laptop has neither, so `built()` returned False and the readers returned
+early before touching a row.
+
+That is the shape of the hazard worth remembering: **a guard that is False for an
+unrelated reason hides a broken reader indefinitely.** The one function an empty
+database did catch was `axes`, and only because `COUNT`/`MIN`/`MAX` return a row
+whether or not the table has any — an aggregate has no empty case to return early
+on. Two builders in this tree open their own connection and set the factory there
+(`maps._build`, line 455), which is fine and is also why the bug survived review:
+the file's own top half is written in the style its bottom half could not use.
+
+### A derived layer is only as fresh as whoever remembered to rebuild it
+
+`moments` and `graph_nodes` are both projections of the same claims, so they go
+stale at the same instant — but the index has a fingerprint and a dirty counter and
+the graph has neither. Boot rebuilds the pair together (`server._index_if_stale`).
+Everything else that changes claims must say so explicitly, and for a while nothing
+did: a first local sweep left the Graph tab reading *no relationships found in this
+database* over a library the engine had just finished processing. Measured: 88
+claims indexed, graph 0 nodes, then 35 nodes and 63 edges from one manual rebuild
+with nothing else changed.
+
+There are now three doors and they are the complete set — boot, `/api/reindex`, and
+`engine_queue._regraph` after the sweep's idle reindex. The engine's copy is **idle
+only**, unlike its mid-sweep text rebuild: this is derivation from rows already
+written, and doing it every `INDEX_EVERY` rows would recompute the whole graph for
+a result nobody can see until the sweep ends. All three are non-fatal, for boot's
+reason — an archive with a stale graph is still searchable, still playable, still
+every other tab.
+
+`server._rebuild_graph` says nothing about the boot phase, and that silence is
+load-bearing. `_BOOT` has no path back to `ready` once something sets it to
+`indexing`, so a post-boot caller announcing through there would leave
+`/api/status` reporting the app as mid-boot for the life of the process, with the
+boot banner drawn over a database that finished indexing.
+
+### A graph that only reads list columns is empty on a laptop
+
+`graph.rebuild` derives from lists, foreign keys, text columns and hashtags, and
+none of those four sees the table this application writes more of than any other.
+`claim` holds one assertion per row — `kind='rhythm', value='metronomic'` — so
+`_is_list_column` looks at `claim.value`, sees one short item, and correctly says
+no. On Kaggle that costs little, because captions and creators and transcripts
+supply relationships of their own. On a laptop with none of those it cost
+everything: Graph was empty, and Roadmap, which builds a plan out of graph nodes,
+offered zero steps. Two of ten tabs, structurally blank on exactly the library this
+half of the application exists for.
+
+`reflect.eav_pair` names the `(attribute, value)` pair, `graph._mine_attrs` reuses
+every filter the tag pass already had, and *which reels were given the same value
+of the same property* turns out to be the only relationship a local archive has
+before anybody writes a word about it. Three reels, 88 claim rows: 37 distinct
+pairs in, 7 nodes out, and Roadmap from 0 steps to 7.
+
+Two things about it generalise. **The pair is named, not inferred** — the shape
+tests were tried first and both are traps: low cardinality needs a threshold to
+tune, and "the value space partitions by attribute" holds on a small archive and
+stops holding the moment two properties share a word, since `wide` is a dynamic
+range and an aspect ratio. A rule that silently switches itself off as data grows
+is worse than a list of names, and column *roles* are where `reflect.py` already
+uses names (`_KEY_NAMES`, `_ROW_SOURCE_COLUMNS`); the argument against name lists
+belongs to token filtering, where the noise class is unbounded. **Colour is read
+per row, not per column** — `source_label('claim','value')` can only answer *meta*,
+which would paint a transcript and a loudness reading the same shade, so the node
+takes `claim.channel`, the row's own declaration, when the group is unanimous. On
+the test library that is 4 style and 3 audio where the flat answer was 7 meta.
 
 ---
 
