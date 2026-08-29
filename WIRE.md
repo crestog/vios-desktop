@@ -53,7 +53,7 @@ including the upstream SHA it was verified against.**
 | `desktop/__main__.py` | The window: credentials → uvicorn on a free port → `webview.create_window`. |
 | `VIOS.bat`, `backup.bat` | Launch, and `git bundle` (there is no remote). |
 
-### Three upstream defects fixed here, worth carrying back if that repo is ever touched
+### Four upstream defects fixed here, worth carrying back if that repo is ever touched
 
 1. **`creds.export_to_env()` never read the local credential file.** `save_local()`
    has always written `~/.vios/credentials.json` and nothing ever exported it, so on
@@ -77,6 +77,25 @@ including the upstream SHA it was verified against.**
    carry a value for it. `shardwriter._DECLARED_TYPES` is the fix on this side and it
    is nine lines; the reader half is `ingest.replay_shard`'s `declared` parameter.
    Both are described under the wire format below.
+4. **`Peer id invalid: -100…` had two causes and one error message, and `tgcompat`
+   only ever addressed half of one of them.** Upstream's `tgcompat.patch()` widens
+   pyrogram's 32-bit `MIN_CHANNEL_ID` so a channel created this year can be named at
+   all — correct, and it was called at three of the five sites that build a `Client`.
+   The other two, `atlas/tgchannel.py` and `db_restore.py`, never called it, which
+   made every MTProto feature depend on whether some *other* feature had opened a
+   session first in the same process. Worse, `patch()` set its done-flag before the
+   import inside a `try` that swallowed everything, and `import pyrogram` raises
+   `RuntimeError` — not `ImportError` — on any non-main thread, which is where all
+   five of these live (`pyrogram/sync.py:31` calls `asyncio.get_event_loop()` at
+   module level). So one early worker-thread failure recorded a permanent "no
+   pyrogram here" and the main thread later built an unpatched client. That is the
+   mechanism behind the failure looking intermittent. Then, past all of that, the
+   *server* returns the same sentence for a different reason: pyrogram reads a
+   numeric **string** as a phone number, and a channel id typed into the UI reaches
+   the client as `'-1004435513595'`. Fixed here structurally — `tgcompat.client()` is
+   the only door to a `Client`, `tgcompat.peer()` normalises the id where it enters
+   the process, and `tgcompat.check()` is now free arithmetic instead of a 1.8-second
+   import, so preflights can afford to call it. See the invariant below.
 
 ### What was deliberately **not** copied
 
@@ -350,7 +369,35 @@ shards does not re-attempt three hours of work whose evidence it already holds
 
 ---
 
-## Five local invariants that are easy to break and expensive to notice
+## Six local invariants that are easy to break and expensive to notice
+
+### Nothing constructs a pyrogram `Client`, and nothing hands it a channel id, directly
+
+Two lines, and between them they are the whole of the `Peer id invalid` class of
+failure:
+
+```python
+from pyrogram import Client        # never. `tgcompat.client(...)` instead.
+app.get_messages(tg.channel, ids)  # only if `tg.channel` is an int.
+```
+
+`tgcompat.client()` widens pyrogram's channel id floor and gives the calling thread
+an event loop before it builds anything, so a new call site cannot forget either.
+`tgcompat.peer()` turns `'-1004435513595'` into `-1004435513595`, because pyrogram
+reads a numeric string as a phone number and raises `PeerIdInvalid` — the *same
+sentence* the un-widened floor produces, from the opposite end of the call. It runs
+in `Telegram.__init__`, so any consumer of `tg.channel` gets an int for free; call it
+again at any boundary where the id arrives as a parameter, which is free and
+idempotent.
+
+Why this is an invariant and not a convention: the constant is process-global and the
+type is per-object, so both failures are order-dependent. The same channel id, the
+same token, and the same code path give different answers depending on which feature
+opened a session first and where the id came from. `grep -rn "from pyrogram import
+Client"` returning nothing is the audit for the first half; `tgcompat.check()` in a
+preflight — it is arithmetic, ~0.04 ms, no import — names a bad id before a run
+starts rather than three hours into one. The reasoning in full is in the
+`tgcompat.py` module docstring.
 
 ### The scan cursor may only advance across ground it actually covered
 

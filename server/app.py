@@ -159,6 +159,48 @@ def seed_capture() -> None:
     threading.Thread(target=_go, name="vios-seed", daemon=True).start()
 
 
+def warm_telegram() -> None:
+    """Import pyrogram and widen its channel id floor, off the critical path.
+
+    `tgcompat.patch()` is idempotent and every construction site calls it
+    already, so this is not what makes the app correct — `tgcompat.client()` is.
+    What it buys is two things, both about time.
+
+    The import costs 1.8 seconds, measured (`python -X importtime -c "import
+    pyrogram"`: 748 ms in `pyrogram.raw.types` alone). Paid here it is paid
+    while the window is still painting; paid at the first `/api/play` on a
+    channel video it is 1.8 seconds of a spinner, and paid inside a 120-second
+    session start it is 1.8 seconds nobody can see.
+
+    The second is diagnosis. If pyrogram is broken rather than absent — a bad
+    install, a version whose `utils` module moved — the boot log says so once,
+    in a line the operator can read, instead of every MTProto feature failing
+    separately with its own translation of the same fault.
+
+    A daemon thread because it must not hold the lifespan open, and inside a
+    `try` because a session that cannot import pyrogram still reads the archive
+    perfectly well: everything MTProto touches is oversize files and channel
+    history, and both of those are already conditional.
+    """
+    import threading                                            # noqa: PLC0415
+
+    def _go() -> None:
+        try:
+            import importlib.util                                # noqa: PLC0415
+            if importlib.util.find_spec("pyrogram") is None:
+                log("no MTProto transport — pyrogram is not installed; files "
+                    "over 50 MB and channel history stay out of reach", SUB)
+                return
+            import tgcompat                                      # noqa: PLC0415
+            note = tgcompat.warm()
+            log(note or "MTProto transport ready", SUB)
+        except Exception as e:                                   # noqa: BLE001
+            log(f"MTProto transport unavailable — {type(e).__name__}: {e}",
+                SUB, "WARN")
+
+    threading.Thread(target=_go, name="vios-tgwarm", daemon=True).start()
+
+
 def _stop_workers() -> None:
     """Ask both workers to finish on the way down. Never raises.
 
@@ -318,6 +360,8 @@ def create_app() -> FastAPI:
         same way and for the same reason — see `start_workers`. `seed_capture`
         is a third: it teaches the capture ledger what the channel already
         holds, which is what makes the Capture tab's Start button safe to press.
+        `warm_telegram` is a fourth, and the cheapest to explain: importing
+        pyrogram costs 1.8 seconds, and the only question is whose 1.8 seconds.
         """
         try:
             import anyio.to_thread
@@ -332,6 +376,7 @@ def create_app() -> FastAPI:
 
         atlas_server.start_boot()
         start_workers()
+        warm_telegram()
         seed_capture()
         log("app up — boot running in the background", SUB)
         yield

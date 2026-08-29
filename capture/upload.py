@@ -159,8 +159,17 @@ class Telegram:
 
     def __init__(self, bot_token: str, channel_id, api_id: int = 0,
                  api_hash: str = ""):
+        import tgcompat
         self.token = (bot_token or "").strip()
-        self.channel = channel_id
+        # Normalised here, once, because this is the boundary a typed string
+        # crosses to become the object every other module reads. It arrives from
+        # the Capture tab as `'-1004435513595'` and used to be stored that way;
+        # the Bot API accepts that, MTProto reads a numeric string as a phone
+        # number and raises `PeerIdInvalid`. See `tgcompat.peer`. Fixing it at
+        # the source rather than at each call site is the point: `self.channel`
+        # is read by the uploader, the scanner, the mirror and the restore, and
+        # four `int()` calls are four chances to add a fifth caller without one.
+        self.channel = tgcompat.peer(channel_id)
         self.api_id = int(api_id or 0)
         self.api_hash = (api_hash or "").strip()
         if not self.token:
@@ -398,19 +407,26 @@ class Telegram:
                 f"{os.path.getsize(path) / 1048576:.0f} MB, over the Bot API's "
                 f"50 MB limit. Add the API id and API hash in the admin tab to "
                 f"upload files this large.")
-        try:
-            import asyncio
-            from pyrogram import Client
-            from tgcompat import patch as _tgpatch
-        except ImportError:
+        import asyncio
+        import importlib.util
+
+        import tgcompat
+
+        # `find_spec`, not an import: the only question is whether the transport
+        # exists, and importing pyrogram to answer it costs 1.8 seconds on a path
+        # that is about to raise anyway.
+        if importlib.util.find_spec("pyrogram") is None:
             raise UploadError("pyrogram is not installed; cannot upload a file "
                               "over 50 MB.")
-        _tgpatch()   # see vios/tgcompat.py — modern channel ids, old library
+        bad = tgcompat.check(self.channel)
+        if bad:
+            raise UploadError(bad)
 
         async def _go():
-            app = Client("vios_capture_big", api_id=self.api_id,
-                         api_hash=self.api_hash, bot_token=self.token,
-                         in_memory=True, no_updates=True)
+            # see vios/tgcompat.py — modern channel ids, old library
+            app = tgcompat.client("vios_capture_big", api_id=self.api_id,
+                                  api_hash=self.api_hash, bot_token=self.token,
+                                  in_memory=True, no_updates=True)
             await app.start()
             try:
                 msg = await app.send_video(

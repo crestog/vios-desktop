@@ -64,20 +64,27 @@ class Channel:
                 self.reason = ("no API id and hash — large files and capture "
                                "records need MTProto")
                 return False
-            try:
-                import asyncio  # noqa: PLC0415
-                from pyrogram import Client  # noqa: PLC0415
-                from tgcompat import patch as _tgpatch  # noqa: PLC0415
-            except ImportError:
+            import asyncio  # noqa: PLC0415
+            import importlib.util  # noqa: PLC0415
+
+            import tgcompat  # noqa: PLC0415
+
+            # `find_spec`, because the question is only "is the transport
+            # installed" and importing pyrogram to find out costs 1.8 seconds.
+            # It is also the guard that still works now that the import lives in
+            # `tgcompat.client`: `import tgcompat` always succeeds, so wrapping
+            # it in `except ImportError` would have made this branch unreachable.
+            if importlib.util.find_spec("pyrogram") is None:
                 self.reason = "pyrogram is not installed"
                 return False
 
-            # Must happen before the first call that names the channel.
-            # Pyrogram rejects channel ids past 2**31 outright, and a channel
-            # created recently has one — which surfaces here as every download
-            # failing while the session itself reports healthy. See
-            # vios/tgcompat.py for the whole story.
-            note = _tgpatch()
+            # Widen pyrogram's channel id floor before the first call that names
+            # the channel. Pyrogram rejects channel ids past 2**31 outright, and
+            # a channel created recently has one — which surfaces here as every
+            # download failing while the session itself reports healthy. See
+            # vios/tgcompat.py for the whole story; `tgcompat.client` below does
+            # this too, and this call is here so the note reaches the log once.
+            note = tgcompat.patch()
             if note:
                 self.log(note)
 
@@ -92,7 +99,7 @@ class Channel:
                 # builds capture the running loop at __init__ time, and one
                 # built on the worker's thread would post its callbacks
                 # somewhere nothing is listening.
-                app = Client(
+                app = tgcompat.client(
                     "vios_process", api_id=int(self.tg.api_id),
                     api_hash=self.tg.api_hash, bot_token=self.tg.token,
                     in_memory=True, no_updates=True,
@@ -155,10 +162,20 @@ class Channel:
 
         async def _go():
             import asyncio  # noqa: PLC0415
+
+            import tgcompat  # noqa: PLC0415
             from pyrogram.errors import FloodWait  # noqa: PLC0415
+
+            # `self.tg` is handed in by whoever built this Channel, so the type
+            # of `.channel` is not this class's to assume. A numeric string
+            # reaches pyrogram as a phone number and raises `PeerIdInvalid` —
+            # the same words the too-small id floor produced, from a different
+            # cause. See `tgcompat.peer`; idempotent, so calling it here as well
+            # as at the source costs nothing.
+            chan = tgcompat.peer(self.tg.channel)
             for attempt in range(4):
                 try:
-                    out = await self._app.get_messages(self.tg.channel, want)
+                    out = await self._app.get_messages(chan, want)
                     if out is None:
                         return []
                     return out if isinstance(out, list) else [out]

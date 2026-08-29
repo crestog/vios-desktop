@@ -673,14 +673,22 @@ async def _fetch_mtproto(mode: str, seq: str | None, work: str,
                          manifest: dict | None) -> tuple:
     """MTProto half, for what the Bot API cannot reach: unpinned manifests and
     v1 bundles with parts over the download cap."""
-    from pyrogram import Client
+    import tgcompat
 
     # Same separate session file the exporter used: the harvester holds its own
     # open for the life of the process and two Clients on one session file
     # fight over its SQLite lock. Export and restore never run together — the
     # admin routes refuse — so sharing one between them is fine.
-    client = Client(EXPORT_SESSION, api_id=config.API_ID, api_hash=config.API_HASH,
-                    bot_token=config.BOT_TOKEN)
+    #
+    # `tgcompat.client`, not `pyrogram.Client`: this function is the reason that
+    # rule exists. It ran with an un-widened channel id floor and died on
+    # `Peer id invalid: -100…` at `_read_manifest`, and because it is the
+    # *fallback* — reached only when `getChat` finds no pinned message — the
+    # failure looked like "restore is broken on this channel" rather than
+    # "one library constant is too small".
+    client = tgcompat.client(EXPORT_SESSION, api_id=config.API_ID,
+                             api_hash=config.API_HASH,
+                             bot_token=config.BOT_TOKEN)
     await client.start()
     try:
         if manifest is None:
@@ -787,6 +795,17 @@ def _run(mode: str, seq: str | None) -> None:
             raise RuntimeError(
                 f"Telegram is not configured ({', '.join(absent)}) — the "
                 f"channel is where bundles live, so restore needs it.")
+
+        # Named here rather than eleven seconds later, from inside a pyrogram
+        # call, as `Peer id invalid: -100…`. This is the failure the user
+        # reported: two lines of progress, then a library's ValueError with no
+        # hint of which of the four settings was wrong. The check is arithmetic
+        # on the id — no import, no network — so it costs nothing to run before
+        # the first `getChat`, and it explains itself.
+        import tgcompat
+        bad = tgcompat.check(config.CHANNEL_ID)
+        if bad:
+            raise RuntimeError(bad)
 
         manifest, files = _fetch(mode, seq, work)
 

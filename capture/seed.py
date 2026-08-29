@@ -233,22 +233,30 @@ def scan_channel(tg, api_id: int, api_hash: str, head: int = 0,
     expensive part, and the alternative (a session per batch) turns four calls
     into four handshakes.
     """
-    try:
-        import asyncio
-        from pyrogram import Client
-        from tgcompat import patch as _tgpatch
-    except ImportError:
+    import asyncio
+    import importlib.util
+
+    import tgcompat
+
+    # `find_spec` rather than an import, because the answer wanted here is only
+    # "is the transport installed" and importing pyrogram to learn it costs 1.8
+    # seconds on a path that may be about to refuse anyway.
+    if importlib.util.find_spec("pyrogram") is None:
         raise RuntimeError(
             "pyrogram is not installed, so the channel cannot be scanned. "
             "Seed from a URL list instead, or install pyrogram.")
-    # Before any call names the channel: pyrogram's chat id floor predates
-    # Telegram's current id range, and a channel made this year is *below* it.
-    # Without this the scan dies on `Peer id invalid` at the first batch.
-    _tgpatch()
     if not (api_id and api_hash):
         raise RuntimeError(
             "Reading channel history needs an API id and API hash. Add them "
             "in the admin tab, or seed from a URL list instead.")
+
+    # Named before the walk starts rather than at the first batch. A channel id
+    # this library cannot express is a fact about the id, knowable in
+    # microseconds, and finding it out three hours into a scan is the difference
+    # this check exists to remove.
+    bad = tgcompat.check(tg.channel)
+    if bad:
+        raise RuntimeError(bad)
 
     head = int(head or head_message_id(tg))
     if head <= 0:
@@ -256,10 +264,13 @@ def scan_channel(tg, api_id: int, api_hash: str, head: int = 0,
                            "the bot can post to the channel.")
 
     async def _go():
-        app = Client("vios_capture_scan", api_id=int(api_id),
-                     api_hash=api_hash, bot_token=tg.token,
-                     in_memory=True, no_updates=True,
-                     max_concurrent_transmissions=2)
+        # `tgcompat.client` widens pyrogram's chat id floor first: it predates
+        # Telegram's current id range, and a channel made this year is *below*
+        # it, so without this the scan dies on `Peer id invalid` at batch one.
+        app = tgcompat.client("vios_capture_scan", api_id=int(api_id),
+                              api_hash=api_hash, bot_token=tg.token,
+                              in_memory=True, no_updates=True,
+                              max_concurrent_transmissions=2)
         await app.start()
         found, reply_index, asset_index = [], {}, {}
         try:
@@ -331,6 +342,15 @@ async def _batch(app, channel, ids):
     it costs the session.
     """
     import asyncio
+
+    import tgcompat
+
+    # `channel` is a parameter, so this function cannot know what it was handed,
+    # and a numeric *string* here is not a type error — it is pyrogram deciding
+    # the id is a phone number and raising `PeerIdInvalid`. `Telegram.__init__`
+    # normalises it at the source; this is the same call again at the boundary
+    # where it actually matters, and it is idempotent on an int.
+    channel = tgcompat.peer(channel)
     from pyrogram.errors import FloodWait
     for attempt in range(4):
         try:

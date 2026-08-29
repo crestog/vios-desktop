@@ -239,19 +239,35 @@ class _Mtproto:
         return self._client is not None
 
     def _run(self):
-        try:
-            from pyrogram import Client
-        except ImportError:
+        # `find_spec`, not a real import: the question here is only "is the
+        # transport installed", and answering it by importing pyrogram costs 1.8
+        # seconds on a thread whose whole job is to not block anything. It is
+        # also the honest guard now that the import itself moved into
+        # `tgcompat.client` — `import tgcompat` always succeeds, so keeping
+        # `except ImportError` around it would have made this branch dead code
+        # and turned "no transport" into a 120-second wait.
+        import importlib.util
+        if importlib.util.find_spec("pyrogram") is None:
             self._error = "pyrogram is not installed"
             self._ready.set()
             return
+        import tgcompat
 
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
         async def _start():
             try:
-                client = Client(
+                # `tgcompat.client`, not `pyrogram.Client`. Two things it does
+                # that a bare import did not, and this thread needed both:
+                # it widens pyrogram's channel id floor, without which every
+                # call naming a modern channel dies on `Peer id invalid` while
+                # the session itself reports healthy; and it gives the importing
+                # thread an event loop, without which `import pyrogram` raises
+                # `RuntimeError` — which is not `ImportError`, so the guard
+                # above never caught it and this thread died before setting
+                # `_ready`, leaving `start()` to wait out its full 120 s.
+                client = tgcompat.client(
                     "atlas_reader",
                     api_id=config.API_ID, api_hash=config.API_HASH,
                     bot_token=config.BOT_TOKEN,

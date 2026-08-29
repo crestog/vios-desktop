@@ -59,86 +59,333 @@ inside the existing 32-bit floor, and a group that outgrows it is migrated by
 Telegram into a supergroup, which is a `-100…` channel and goes down the branch
 this module actually fixes.
 
-`patch()` is idempotent, never raises, and is safe to call from a module that
-may be imported on a machine with no pyrogram at all. Call it immediately
-before constructing a Client — not at package import — so that the one place
-that must not fail (importing `vios.capture`) stays free of pyrogram.
+**The rule: never write `from pyrogram import Client`. Call `client()`.**
+
+That is not a style preference, it is the entire fix, and the reason is that the
+previous rule — "remember to call `patch()` before constructing a Client" — was
+followed at three of the five sites that construct one and forgotten at the other
+two. Forgotten quietly, because the constant is process-global: whether a feature
+works depends on whether some *other* feature happened to open a session first in
+the same process. Scan the channel and then restore, and restore works. Restore
+into a fresh window and it dies on `Peer id invalid`, with a library message that
+names the id and implicates the id, which is the one thing that is not wrong.
+Measured, on the two that had no patch call:
+
+    atlas/tgchannel.py   the MTProto reader behind playback and the channel walk
+    db_restore.py        the manifest fallback, reached whenever the pinned
+                         message is missing — which is every restore on a
+                         channel nobody has pinned to
+
+`client()` closes that off by construction rather than by discipline. It is the
+only door to a `Client` in this repository, it patches before it builds, and a
+grep for `from pyrogram import Client` is now a complete audit of whether anyone
+has walked around it.
+
+**The second rule: a channel id reaches pyrogram as an `int`. Call `peer()`.**
+
+Widening the floor got the app past pyrogram's local rejection and into an
+identical-looking one from the server — same class, same sentence, different
+cause. `config.CHANNEL_ID` coerces to `int`; a channel id typed into the Capture
+tab reached `Telegram.__init__` as `'-1004435513595'` and was stored as a string,
+and pyrogram reads a numeric string as a **phone number**. Measured: the Bot API
+read that exact channel — `getChat` returned the title, two members and a pinned
+message — while MTProto refused it, because the two disagreed about what the
+value *was*, not about what it said. `peer()` is where that ends, and
+`Telegram.__init__` calls it so no consumer has to. Full story at `peer()`.
+
+Three further things this module got wrong, and all three produce exactly the
+symptom a missing call produces, which is why the bug looked intermittent.
+
+**A failed import latched.** `patch()` set `_done = True` and *then* imported
+pyrogram, inside a `try` that swallowed everything. So the first call that failed
+for any reason recorded a permanent verdict, and every later call in that process
+— including from a thread where the import would have succeeded — took the fast
+path and widened nothing. This is the mechanism behind "it works sometimes":
+nothing about the channel, the token or the id changes between the run that works
+and the run that does not. A failed import no longer latches.
+
+**And that import fails on a worker thread, which is where all of them happen.**
+`pyrogram/__init__.py` imports `sync.py`, which calls `asyncio.get_event_loop()`
+at module level. Since Python 3.10 that only auto-creates a loop on the main
+thread; anywhere else it raises `RuntimeError: There is no current event loop in
+thread 'atlas-mtproto'`. Every MTProto client in this application is built on a
+worker thread. Worse, `RuntimeError` is not `ImportError`, so the `except
+ImportError` wrapped around each of those five imports never caught it — the
+thread just died. Measured: twelve threads calling `patch()` on a fresh process,
+twelve RuntimeErrors, and `patch()` reporting "no pyrogram here" to all of them.
+`_ensure_event_loop()` is the fix and it is why `client()` is worth having beyond
+the patch: it makes the import possible, not just correct.
+
+**`check()` cost 1.8 seconds and therefore had no callers.** Its docstring
+claimed the readiness checks used it; nothing did, which is why a bad channel id
+was reported by pyrogram three calls into a run instead of by name before it
+started. It no longer imports pyrogram at all — the bounds are arithmetic and
+this module already knows them — so a preflight can afford to ask.
+
+`patch()` is idempotent, never raises, and is safe to call from a module that may
+be imported on a machine with no pyrogram at all.
 """
 
 from __future__ import annotations
+
+import threading
 
 # -100 followed by 2**40. Telegram channel ids crossed 2**31 in 2024; this
 # leaves three orders of magnitude of headroom rather than moving the goalpost
 # by one bit and having to do it again.
 WIDE_MIN_CHANNEL_ID = -1001099511627776
 
+# Pyrogram's own ceiling, restated so `check()` can answer without importing the
+# library. Read from pyrogram when it happens to be loaded; this is the fallback
+# and it is the value every published pyrogram has carried.
+MAX_CHANNEL_ID = -1000000000000
+
+_lock = threading.Lock()
 _done = False
-_result = ""
+
+
+def _ensure_event_loop() -> None:
+    """Give this thread an event loop, because importing pyrogram needs one.
+
+    `pyrogram/__init__.py:40` imports `sync.py`, which at line 31 calls
+    `asyncio.get_event_loop()` at *module* level to keep a `main_loop` for its
+    synchronous convenience wrappers. In Python 3.10+ that only auto-creates a
+    loop on the main thread; anywhere else it raises
+
+        RuntimeError: There is no current event loop in thread 'atlas-mtproto'
+
+    and `import pyrogram` fails. Every MTProto client in this application is
+    built on a worker thread, so that is the common case, not the edge one — and
+    it does not raise `ImportError`, so the `except ImportError` guarding each of
+    those imports does not catch it. Measured: twelve threads calling `patch()`
+    on a process where pyrogram was not yet loaded, twelve RuntimeErrors.
+
+    The loop we set is never run. `sync.py` captures it for wrappers this
+    application does not use — `atlas/tgchannel.py:_raw` exists precisely to
+    reach past them to the real coroutines — and every caller sets its own loop
+    immediately afterwards. It exists so that one import statement can finish.
+    """
+    import asyncio                                          # noqa: PLC0415
+    try:
+        asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 def patch() -> str:
-    """Widen pyrogram's channel id floor. Returns a one-line note, or "".
+    """Widen pyrogram's channel id floor. Returns a one-line note, once.
 
-    The note is worth logging once: if a future pyrogram fixes this upstream
-    the patch becomes a no-op, and the log is how you find out.
+    The note is worth logging: if a future pyrogram fixes this upstream the
+    patch becomes a no-op, and the log is how you find out.
+
+    **Once** is part of the contract, not an accident. Every caller does the
+    same thing with the return value — `note = patch(); if note: log(note)` —
+    and there are five of them plus the boot warm-up, all racing at start-up.
+    Handing the same sentence to each printed it six times. So the first call
+    that actually moves the constant gets the note and everyone after gets `""`,
+    which makes "log it if it is non-empty" correct at every site without any
+    site having to know whether it was first. Measured before the change:
+    twelve threads, twelve copies of the note.
 
     Only `MIN_CHANNEL_ID` is moved. See the module docstring for why touching
     `MIN_CHAT_ID` turns a loud error into a silently wrong peer type.
+
+    Three things about the bookkeeping, and each one was a way this function
+    could report success while having done nothing:
+
+    it holds a lock, because the `import pyrogram` inside takes about 1.8 seconds
+    and a second thread arriving mid-import used to see the flag and leave;
+    `_done` is set at the end rather than the start, for the same reason; and
+    **a failed import does not latch.** That last one is the whole of the bug the
+    user kept hitting. One early call from a thread with no event loop raised
+    inside the `try`, set `_done = True` on the way out, and every later call in
+    that process — including from the main thread, where the import would have
+    worked — took the fast path and widened nothing. A transient, thread-local
+    failure was recorded as a permanent verdict about the library.
     """
-    global _done, _result
-    if _done:
-        return _result
-    _done = True
-    try:
-        from pyrogram import utils as _u  # noqa: PLC0415
-    except Exception:
-        _result = ""
-        return _result
+    global _done
+    if _done:                    # fast path, and safe: `_done` is only ever
+        return ""                # set once the constant is already moved
+    with _lock:
+        if _done:
+            return ""
+        try:
+            _ensure_event_loop()
+            from pyrogram import utils as _u  # noqa: PLC0415
+        except Exception:
+            # Retryable on purpose. "pyrogram is genuinely absent" and "this
+            # thread could not import it just now" are indistinguishable here,
+            # and only one of them is permanent.
+            return ""
 
-    changed = False
-    if getattr(_u, "MIN_CHANNEL_ID", 0) > WIDE_MIN_CHANNEL_ID:
-        _u.MIN_CHANNEL_ID = WIDE_MIN_CHANNEL_ID
-        changed = True
+        changed = False
+        if getattr(_u, "MIN_CHANNEL_ID", 0) > WIDE_MIN_CHANNEL_ID:
+            _u.MIN_CHANNEL_ID = WIDE_MIN_CHANNEL_ID
+            changed = True
 
-    # Some pyrogram builds read the constant into `pyrogram.utils` only, others
-    # also expose it on `pyrogram` itself. Keep both in step.
-    try:
-        import pyrogram as _p  # noqa: PLC0415
-        if hasattr(_p, "MIN_CHANNEL_ID"):
-            _p.MIN_CHANNEL_ID = _u.MIN_CHANNEL_ID
-    except Exception:
-        pass
+        # Some pyrogram builds read the constant into `pyrogram.utils` only,
+        # others also expose it on `pyrogram` itself. Keep both in step.
+        try:
+            import pyrogram as _p  # noqa: PLC0415
+            if hasattr(_p, "MIN_CHANNEL_ID"):
+                _p.MIN_CHANNEL_ID = _u.MIN_CHANNEL_ID
+        except Exception:
+            pass
 
-    _result = ("widened pyrogram's channel id floor to -100+2**40 "
-               "(modern Telegram channel ids sit past its 32-bit bound)"
-               if changed else "")
-    return _result
+        _done = True
+        # Returned, not stored. Only one call in the life of a process can reach
+        # this line — every later one short-circuits on `_done` above — so "hand
+        # the note out once" needs no second flag to enforce it, and a flag that
+        # looked like it enforced something would be the kind of state this
+        # module already got wrong once.
+        return ("widened pyrogram's channel id floor to -100+2**40 "
+                "(modern Telegram channel ids sit past its 32-bit bound)"
+                if changed else "")
+
+
+def peer(value):
+    """Whatever the config holds → what pyrogram wants. The other half of this.
+
+    Widening the floor got the app past pyrogram's *local* rejection and straight
+    into an identical-looking one from the server:
+
+        PeerIdInvalid: [400 PEER_ID_INVALID] - The peer id being used is invalid
+        or not known yet. Make sure you meet the peer before interacting with it
+
+    Same words, different cause, and measured: the Bot API read that channel
+    fine — `getChat` returned `type=channel`, a title, two members and a pinned
+    message — while MTProto refused it. What differed was the *type*.
+    `config.CHANNEL_ID` is coerced to `int` on the way out
+    (`config._INT`), but a channel id typed into the Capture tab reaches
+    `Telegram.__init__` as the string `'-1004435513595'` and was stored as one,
+    and pyrogram's `resolve_peer` does this to a `str`:
+
+        peer_id = re.sub(r"[@+\\s]", "", peer_id.lower())
+        try:
+            int(peer_id)
+        except ValueError:
+            ...resolve as a username...
+        else:
+            return await self.storage.get_peer_by_phone_number(peer_id)
+
+    The substitution strips `@` and `+` but not `-`, so `'-1004435513595'`
+    parses as an integer, and pyrogram concludes it is a **phone number** — looks
+    it up in an empty session cache, and raises. The Bot API accepts either type
+    because it is JSON over HTTPS, which is why this stayed invisible for as long
+    as every large-file path was unreachable for the *other* reason.
+
+    So: numeric strings become integers, and everything else is returned
+    untouched — `@name`, `name`, and `t.me/name` are the username path, which is
+    the one thing about `resolve_peer`'s string handling that is correct.
+    """
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return value
+    body = text[1:] if text.startswith("-") else text
+    # `-` is the only sign accepted, and `+` deliberately is not: a leading `+`
+    # is how a *phone number* is written, it is not how anyone writes a channel
+    # id, and converting it would take pyrogram's phone-number path — the one
+    # correct use of a numeric string — and turn it into a positive user id.
+    #
+    # `isdigit`, not `try: int()`. `int()` accepts "1_0", "٣", and surrounding
+    # whitespace; a channel id is ASCII digits with an optional minus, and a
+    # normaliser looser than the thing it feeds is a second bug waiting.
+    if body.isdigit() and body.isascii():
+        return int(text)
+    return text
+
+
+def client(*args, **kwargs):
+    """A patched `pyrogram.Client`. **The only way to build one in this repo.**
+
+    Every argument goes straight through, so this reads as `Client(...)` at the
+    call site and there is nothing to remember beyond the name. What it adds is
+    the two lines that cannot be left out: this thread gets an event loop so the
+    import can finish at all, and the channel id floor is widened before the
+    object that will resolve a peer id exists.
+
+    Raises `ImportError` if pyrogram is absent, which is what `from pyrogram
+    import Client` did — every caller already handles it, and turning it into
+    something else would break their "no transport installed" messages. It will
+    not raise `RuntimeError` about a missing event loop, which that line *did* on
+    every worker thread, and which no caller handles.
+    """
+    patch()
+    _ensure_event_loop()         # cheap, idempotent, and the reason this works
+    from pyrogram import Client  # noqa: PLC0415
+    return Client(*args, **kwargs)
+
+
+def warm() -> str:
+    """Do the 1.8-second pyrogram import now, off the critical path.
+
+    Called from a daemon thread at boot. Three reasons, and the first is not the
+    correctness of the patch — `client()` owns that:
+
+    the first Telegram action of a session pays for `pyrogram.raw.types` no
+    matter who triggers it, and paying it during boot rather than during a
+    restore is the difference between a progress line that sits still for two
+    seconds and one that does not; if a future call site does bypass `client()`,
+    the constant is already moved by the time anyone can press a button; and the
+    log line it returns is the only place the patch announces itself, which is
+    how you would find out that a future pyrogram had fixed this upstream.
+    """
+    return patch()
 
 
 def check(channel) -> str:
-    """Why pyrogram would reject this channel id, or "" if it would accept it.
+    """Why this channel id will not work, or "" if it will.
 
-    Used by the readiness checks so a bad id is named before a run starts
+    Called from the readiness checks so a bad id is named before a run starts
     rather than three hours in, and so a *genuinely* malformed id — a username
-    typed where a numeric id belongs, a copied-with-space paste — is still
-    reported as malformed after the patch.
+    typed where a numeric id belongs, a group id that was never migrated, a
+    positive number pasted from the wrong field — is still reported after the
+    patch has stopped the false positives.
+
+    Deliberately arithmetic, and deliberately not `pyrogram.utils.get_peer_type`.
+    Asking pyrogram means importing pyrogram, which is 1.8 seconds; a preflight
+    that costs 1.8 seconds does not get called, and the previous version of this
+    function was never called by anything. The bounds are three constants and one
+    comparison, both of which this module already has to know to do its job.
+
+    It answers for the *patched* library, because `client()` guarantees the patch
+    ran. If pyrogram is already loaded its live ceiling is used rather than the
+    restated one, so an upstream that moves the bound is followed rather than
+    contradicted.
     """
-    patch()
     text = str(channel or "").strip()
     if not text:
         return "no channel id"
-    if text.startswith("@") or not text.lstrip("-").isdigit():
-        return ""          # a username; pyrogram resolves those by lookup
+    if text.startswith("@"):
+        return ""              # a username; pyrogram resolves those by lookup
     try:
-        from pyrogram import utils as _u  # noqa: PLC0415
-        _u.get_peer_type(int(text))
-    except ImportError:
-        return ""
+        peer = int(text)
     except ValueError:
-        return (f"pyrogram will not accept {text} as a chat id. A channel id "
-                f"looks like -100 followed by digits; a supergroup that has "
-                f"not been migrated, or an id copied from the wrong field, "
-                f"looks like this.")
-    except Exception:
-        return ""
-    return ""
+        return (f"{text[:60]!r} is not a channel id. It looks like -100 "
+                f"followed by digits, or an @username.")
+
+    ceiling = MAX_CHANNEL_ID
+    import sys                                             # noqa: PLC0415
+    loaded = sys.modules.get("pyrogram.utils")
+    if loaded is not None:
+        ceiling = getattr(loaded, "MAX_CHANNEL_ID", ceiling)
+
+    if peer > 0:
+        return ""              # a user or bot id; not this module's business
+    if WIDE_MIN_CHANNEL_ID <= peer < ceiling:
+        return ""              # a channel or supergroup — the normal case
+    if peer >= -2147483647:
+        return (f"{peer} is a basic-group id, not a channel id. Telegram gives "
+                f"a channel an id of the form -100 followed by digits. If this "
+                f"group has grown into a supergroup its id will have changed; "
+                f"read the new one from the channel itself.")
+    if peer < WIDE_MIN_CHANNEL_ID:
+        return (f"{peer} is below every channel id Telegram issues (-100 "
+                f"followed by up to 2**40). Check for a missing digit or an "
+                f"extra one.")
+    return (f"{peer} is not in the range Telegram uses for channels "
+            f"({WIDE_MIN_CHANNEL_ID} to {ceiling}).")

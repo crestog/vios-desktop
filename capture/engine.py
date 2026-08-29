@@ -319,6 +319,21 @@ class CaptureEngine:
         else:
             check("Telegram", False, "No bot token or channel id yet.")
 
+        # A separate row from "Telegram", because it is a separate question with
+        # a separate answer. `probe()` speaks the Bot API, which accepts any
+        # channel id Telegram ever issued; MTProto — needed for every upload over
+        # 50 MB and for the channel scan — goes through pyrogram, whose id range
+        # is narrower than Telegram's. So the probe can pass, the row above can
+        # read "@bot → My Channel", and the first oversize upload can still die
+        # on `Peer id invalid`. Non-blocking: with `tgcompat` in the path this
+        # now resolves for ids past the 32-bit bound, and the only thing left
+        # that can fail here is an id that is not a channel at all.
+        import tgcompat
+        chan = self._tg.channel if self._tg else None
+        bad = tgcompat.check(chan)
+        check("Channel id (MTProto)", not bad,
+              bad or f"{chan} is inside pyrogram's range", blocking=False)
+
         check("Instagram cookies",
               bool(self._cookies_path and os.path.isfile(self._cookies_path)),
               "loaded" if self._cookies_path else
