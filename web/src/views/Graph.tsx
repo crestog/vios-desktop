@@ -331,7 +331,7 @@ export default function GraphView({ route }: ViewProps) {
             className="input-text search-box"
             value={find}
             onChange={(e) => setFind(e.target.value)}
-            placeholder="find a creator, an object, a hashtag…"
+            placeholder="find a creator, an object, a property, a hashtag…"
             spellCheck={false}
             aria-label="Find a node"
           />
@@ -488,7 +488,8 @@ export default function GraphView({ route }: ViewProps) {
               </div>
               <div className="rail-note">
                 A colour is <em>who said it</em>, never what it is. Values mined out of a text
-                column wear their channel's hue; reels, platform rows and hashtags are deliberately
+                column wear their channel's hue, and a measured property wears the hue of the
+                observer that measured it; reels, platform rows and hashtags are deliberately
                 colourless, because nobody checked which observer put the <code>#</code> there.
               </div>
             </div>
@@ -616,6 +617,20 @@ interface InspectorProps {
   onClose: () => void;
 }
 
+/**
+ * The database table behind a node — `""` when it has none to open.
+ *
+ * `meta.table` is written by every derivation that reads one, which is all of
+ * them except `hashtag`: a hashtag is mined from whichever column happened to
+ * hold a `#`, and the node keeps no record of which. The `dim` fallback is for a
+ * graph built before `meta` carried the table at all.
+ */
+function tableOf(n: { kind?: string; sub?: string | null; meta?: Record<string, unknown> }): string {
+  const t = n.meta?.table;
+  if (typeof t === 'string' && t) return t;
+  return String(n.kind || '').toLowerCase() === 'dim' ? String(n.sub || '') : '';
+}
+
 function Inspector({
   id,
   nodes,
@@ -721,10 +736,25 @@ function Inspector({
           </dd>
           {node?.sub && (
             <>
-              <dt>{node.kind === 'dim' ? 'table' : node.kind === 'tag' ? 'column' : 'group'}</dt>
+              <dt>
+                {node.kind === 'dim'
+                  ? 'table'
+                  : node.kind === 'tag'
+                    ? 'column'
+                    : node.kind === 'attr'
+                      ? 'property'
+                      : 'group'}
+              </dt>
               <dd>
-                {node.kind === 'dim' || node.kind === 'tag' ? (
-                  <a className="kv-link" href={href('data', { params: { table: String(node.sub) } })}>
+                {/* The link goes to the *table*, which is what the Data tab
+                    takes. A tag's `sub` is a column and an attr's is a property
+                    name; neither is a table, and both nodes carry the real one
+                    in `meta.table`. A dim's `sub` is already the table. */}
+                {tableOf(node) ? (
+                  <a
+                    className="kv-link"
+                    href={href('data', { params: { table: tableOf(node) } })}
+                  >
                     {node.sub}
                   </a>
                 ) : (

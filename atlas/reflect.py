@@ -300,7 +300,12 @@ def cell_value(value):
 # 2 → `frame_t`/`frame_t1` recognised as times; `shot_idx` borrows `shot.t0/t1`.
 # 3 → a placed passage now outranks an identical unplaced one, instead of losing
 #     the `INSERT OR IGNORE` race to it (`index.build_passages`).
-_RULES_VERSION = 3
+# 4 → attribute stores are recognised (`eav_pair`), so the graph can see that two
+#     reels asserted the same value of the same property. Only the graph reads
+#     that rule, and the graph has no staleness signal of its own: it is rebuilt
+#     beside the index, and the index rebuilds when this hash moves. Bumping it
+#     here is what carries the rule to an archive that already exists.
+_RULES_VERSION = 4
 
 
 def fingerprint(conn: sqlite3.Connection) -> str:
@@ -450,6 +455,82 @@ def _row_source_labels(conn, table: str, cols: list):
         if vals and all(v in _KNOWN_SOURCES for v in vals):
             return name, sorted(set(vals))
     return None
+
+
+def row_source_column(conn: sqlite3.Connection, table: str, cols: list) -> str:
+    """The column whose value names each row's evidence kind, or "".
+
+    `text_sources` splits the evidence store into one spec per channel on this
+    same reading. The graph uses it to colour a node by the observer that made
+    the claim instead of by the table the claim sits in — `source_label('claim',
+    'value')` can only answer *"meta"*, which would paint a transcript and a
+    loudness reading the same shade.
+    """
+    found = _row_source_labels(conn, table, cols)
+    return found[0] if found else ""
+
+
+# Columns whose value names *what* a row asserts, next to the column holding
+# the assertion itself. Order is preference: a table carrying both `kind` and
+# `name` uses `kind` for the property and `name` for a human label.
+_ATTR_COLUMNS = ("kind", "attribute", "attr", "property", "metric", "measure",
+                 "aspect", "facet", "field", "name", "label", "type")
+_VALUE_COLUMNS = ("value", "val", "reading", "verdict", "answer", "text")
+
+
+def eav_pair(conn: sqlite3.Connection, table: str, cols: list):
+    """(attribute, value) column names when a table is an attribute store.
+
+    An attribute store keeps one assertion per row — `kind='rhythm',
+    value='metronomic'` — instead of one column per property, and nothing else
+    in this module can see that. `content_columns` reports both columns as
+    independent text, `dimension_links` finds no foreign key, and a reader that
+    takes `value` for a column of unrelated strings learns that three reels each
+    said something without ever learning that two of them said the *same* thing
+    about the same property. That is the difference between an archive with a
+    relationship graph and one with a list.
+
+    Named rather than inferred, deliberately. The shape tests that would find
+    this pair without names are all worse: a low-cardinality partition needs a
+    threshold to tune, and "no value appears under two attributes" is an
+    accident of a small archive that stops holding the moment two properties
+    share a word — `wide` is a dynamic range and an aspect ratio. A rule that
+    quietly switches itself off once there is real data in the table is worse
+    than a list of names, and naming a column's *role* is what `key_column`,
+    `time_columns` and `_row_source_labels` all already do.
+
+    The data keeps a veto, for the same reason `_row_source_labels` checks its
+    values: the attribute column has to *group* rows rather than identify them.
+    A `name` column holding one distinct value per row is a title, and pairing
+    it with anything would put a node per row into whatever reads this.
+    """
+    by_norm = {_norm(c["name"]): c for c in cols}
+    key = _norm(key_column(cols))
+    attr = value = ""
+    for want in _ATTR_COLUMNS:
+        col = by_norm.get(want)
+        if col and want != key and _is_texty(col):
+            attr = col["name"]
+            break
+    if not attr:
+        return None
+    for want in _VALUE_COLUMNS:
+        col = by_norm.get(want)
+        if col and want != key and want != _norm(attr) and _is_texty(col):
+            value = col["name"]
+            break
+    if not value:
+        return None
+    try:
+        distinct, rows = conn.execute(
+            f"SELECT COUNT(DISTINCT {_q(attr)}), COUNT(*) FROM {_q(table)} "
+            f"WHERE {_q(attr)} IS NOT NULL AND TRIM({_q(attr)}) <> ''"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if (distinct or 0) < 2 or (distinct or 0) >= (rows or 0):
+        return None
+    return attr, value
 
 
 # ══════════════════════════════════════════════════════════════════════════

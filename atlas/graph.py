@@ -12,7 +12,7 @@ visible in a table view, and all of it is exactly what a person means when they
 say they want to explore.
 
 So this module reads the graph *out* of the schema rather than being told it.
-Four derivations, none of which names a table:
+Five derivations, none of which names a table:
 
 **Videos** are the anchor. One node per row of `video_index`, which is the one
 table Atlas builds itself, so it is always there and always has a message id —
@@ -35,6 +35,14 @@ starts being useful: it connects videos that share nothing but a coffee cup.
 
 **Hashtags** are mined from every text column, because a caption's `#hashtag` is
 an author-supplied label and throwing it away would be silly.
+
+**Attributes** are the same idea one table over. An evidence store that writes
+`kind='rhythm', value='metronomic'` is not a list column and not a foreign key,
+so the four passes above cannot see it, and on a laptop with no captions and no
+creators it is the *only* place a relationship lives. `reflect.eav_pair` names
+the two columns; each distinct property-and-value becomes a node, and every reel
+that was given that value gets an edge. This is what makes the graph work on an
+archive nobody has written a word about.
 
 Everything is precomputed into two ordinary tables and read back through indexed
 lookups, so expanding a node is a millisecond, not a scan. The graph is rebuilt
@@ -67,7 +75,7 @@ FANOUT              = 60      # default neighbours returned per expansion
 _DDL = (
     "CREATE TABLE IF NOT EXISTS graph_nodes ("
     "  id TEXT PRIMARY KEY,"
-    "  kind TEXT NOT NULL,"        # video | dim | tag | hashtag
+    "  kind TEXT NOT NULL,"        # video | dim | tag | attr | hashtag
     "  label TEXT NOT NULL,"
     "  sub TEXT,"                  # the group: creators, objects, …
     "  weight REAL DEFAULT 0,"     # degree, for size and for ranking
@@ -128,6 +136,19 @@ def tag_id(table: str, column: str, token: str) -> str:
     return f"t:{table}.{column}:{token}"
 
 
+def attr_id(table: str, attribute: str, token: str) -> str:
+    """`a:claim.rhythm:metronomic` — a value of one named property.
+
+    Shaped like a tag id and read back the same way, but it cannot *be* one: a
+    tag's middle part is a column, and `rhythm` is a value of `claim.kind`. A
+    reader that mistook the two would go looking for a column called `rhythm`.
+    Two properties are also free to share a word — `wide` is a dynamic range and
+    an aspect ratio — and keeping the property in the id is what stops them
+    collapsing into one node that claims both reels agree.
+    """
+    return f"a:{table}.{attribute}:{token}"
+
+
 def hashtag_id(token: str) -> str:
     return f"h:{token}"
 
@@ -147,6 +168,12 @@ def parse_id(node_id: str) -> dict:
         head, _, token = rest.partition(":")
         table, _, column = head.partition(".")
         return {"kind": "tag", "table": table, "column": column,
+                "token": token}
+    if kind == "a":
+        rest = s[2:]
+        head, _, token = rest.partition(":")
+        table, _, attribute = head.partition(".")
+        return {"kind": "attr", "table": table, "attribute": attribute,
                 "token": token}
     if kind == "h":
         return {"kind": "hashtag", "token": s[2:]}
@@ -170,6 +197,60 @@ def _clean_token(value) -> str:
     if s.replace(".", "").isdigit():
         return ""
     return s
+
+
+def _universal(df: int, videos: int) -> bool:
+    """Does this token appear on every video, and so distinguish none of them?
+
+    The mirror of `MIN_TAG_COUNT`, and the same argument at the other end: a
+    token seen once connects nothing, and a token seen everywhere separates
+    nothing. It is inverse document frequency — `log(N / df)` is exactly zero
+    when `df == N`, so a term on every document carries no information about any
+    of them. No threshold and nothing to tune, which is why the test is `df ==
+    videos` and not a ratio.
+
+    This is what keeps a record's field names out of the graph. `split_list`
+    treats a JSON object's keys as items, which is right for a counted bag —
+    `{"speech": 41, "ocr": 12}` really is a list of things — and wrong for a
+    record, where the keys name the fields. `artifact.meta` holds five different
+    record shapes, and mining them put fifteen nodes in the graph called `cols`,
+    `count`, `cover_at`, `duration`, `fps`, `interval`, `key`, `manifest`,
+    `rows`, `sheet`, `span`, `tiers`, `tile_h`, `tile_w` and `width`, each
+    joined to every reel in the archive — the graph asserting that three reels
+    share the concept *fps*. Field names are universal by construction, because
+    every row of a record has them, so this one test removes the whole class
+    without a list of names to maintain or a guess about which tables are
+    internal.
+
+    One video is not a corpus: with `videos <= 1` every token is trivially
+    universal, so the rule is switched off rather than emptying the graph.
+    """
+    return videos > 1 and df >= videos
+
+
+def _is_structured(value) -> bool:
+    """Is this value a JSON document rather than prose?
+
+    Used to keep hashtag mining out of machine-written values. `#` in a caption
+    introduces a tag; `#` inside a JSON payload is a colour, an id or a URL
+    fragment. The palette pass writes `{"colours": [{"hex": "#07fafc", …}]}`
+    into `claim.value`, and mining that as prose gave the Graph tab seventeen
+    "hashtags" — `#0102bd`, `#f8fcfc`, `#fa0101` — every one a swatch, offered
+    to the user as a topic to explore, and clickable through to the reel that
+    happened to contain that shade of cyan.
+
+    Shape, not a name list: matching `#[0-9a-f]{6}` instead would have been a
+    guess about hex that also throws away `#c0ffee` and `#facade`, which are
+    legitimate hashtags a real caption can carry.
+    """
+    s = str(value or "").strip()
+    if s[:1] not in "[{":
+        return False
+    try:
+        json.loads(s)
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def split_list(value) -> list:
@@ -236,6 +317,48 @@ def _is_list_column(values: list) -> bool:
         return False
     mean_words = sum(lengths) / len(lengths)
     return (listy / seen) >= 0.55 and mean_words <= 4.0
+
+
+def _mine_attrs(table: str, value_col: str, attr_col: str, counts: dict,
+                channels: dict, videos: set, add_node, add_edge) -> int:
+    """Turn counted `(property, value)` pairs into nodes, and say how many.
+
+    Every filter here already existed for tags, and each one earns its place on
+    this table too. `MIN_TAG_COUNT` drops the measurements that are shared with
+    nobody — `1.50s average shot`, `133 of 192 frames differ from the one
+    before` — which is most of an attribute store and exactly the part with no
+    relationship in it. `_universal` drops the properties every reel was given
+    the same answer to: on three test reels that is `motion_energy=still` and
+    `saturation=vivid`, four nodes that would each have connected the whole
+    archive to itself and said nothing.
+
+    What survives is the useful middle: two reels of three sharing `rhythm =
+    metronomic` and `brightness = balanced`. Measured on that library, 88 claim
+    rows in, 7 nodes out.
+    """
+    kept = 0
+    for slot, keys in sorted(counts.items(), key=lambda kv: -len(kv[1])):
+        if len(keys) < MIN_TAG_COUNT or kept >= MAX_TAGS_PER_COLUMN:
+            break
+        if _universal(len(keys), len(videos)):
+            continue
+        kept += 1
+        attribute, tok = slot
+        # One observer per property in practice; where that does not hold, the
+        # honest answer is the table's own label rather than whichever channel
+        # happened to come first out of the query.
+        seen = channels.get(slot) or set()
+        source = (next(iter(seen)) if len(seen) == 1
+                  else reflect.source_label(table, value_col))
+        nid = attr_id(table, attribute, tok)
+        add_node(nid, "attr", tok, attribute,
+                 {"table": table, "column": value_col,
+                  "attribute_column": attr_col, "attribute": attribute,
+                  "token": tok, "source": source, "videos": len(keys)})
+        for vk in keys:
+            add_edge(video_id(vk), nid, attribute,
+                     f"{table}|{value_col}|{tok}")
+    return kept
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -375,8 +498,9 @@ def rebuild(conn: sqlite3.Connection) -> dict:
 
             listy = _is_list_column(sample)
             # Hashtags are worth mining from any text; a caption is prose and
-            # still carries them.
-            wants_hash = any("#" in str(v or "") for v in sample)
+            # still carries them. Not from JSON, though — see `_is_structured`.
+            wants_hash = any("#" in str(v or "") and not _is_structured(v)
+                             for v in sample)
             if not listy and not wants_hash:
                 continue
 
@@ -400,7 +524,7 @@ def rebuild(conn: sqlite3.Connection) -> dict:
                         tok = _clean_token(item)
                         if tok:
                             counts.setdefault(tok, set()).add(vk)
-                if wants_hash and "#" in text:
+                if wants_hash and "#" in text and not _is_structured(text):
                     for m in _HASHTAG.finditer(text):
                         hashes.setdefault(m.group(1).lower(), set()).add(vk)
 
@@ -410,6 +534,8 @@ def rebuild(conn: sqlite3.Connection) -> dict:
             for tok, keys in keep:
                 if len(keys) < MIN_TAG_COUNT or kept >= MAX_TAGS_PER_COLUMN:
                     break
+                if _universal(len(keys), len(videos)):
+                    continue
                 kept += 1
                 nid = tag_id(table, column, tok)
                 add_node(nid, "tag", tok, column,
@@ -428,6 +554,52 @@ def rebuild(conn: sqlite3.Connection) -> dict:
                 for vk in keys:
                     add_edge(video_id(vk), nid, "hashtag",
                              f"{table}|{column}|#{tok}")
+
+    # ── attributes ────────────────────────────────────────────────────────
+    # An attribute store holds one assertion per row — `kind='rhythm',
+    # value='metronomic'` — so its values are not a list to split, and the pass
+    # above therefore skips it: `_is_list_column` sees one short item per row and
+    # says no. That left the graph blind to the table this application writes
+    # more of than any other. Every reel gets a rhythm, a brightness and a
+    # dynamic range, and *which reels were given the same one* is the most
+    # answerable relationship in a local archive — the only one that needs no
+    # captions, no creators and no transcript to exist.
+    _set(phase="reading", detail="pairing attribute stores")
+    for table in tables:
+        cols = reflect.columns(conn, table)
+        key = reflect.key_column(cols)
+        pair = reflect.eav_pair(conn, table, cols) if key else None
+        if not pair:
+            continue
+        attr_col, value_col = pair
+        chan_col = reflect.row_source_column(conn, table, cols)
+        picked = [key, attr_col, value_col] + ([chan_col] if chan_col else [])
+        try:
+            rows = conn.execute(
+                f"SELECT {', '.join(_q(c) for c in picked)} FROM {_q(table)} "
+                f"WHERE {_q(value_col)} IS NOT NULL "
+                f"AND TRIM({_q(value_col)}) <> '' "
+                f"AND {_q(attr_col)} IS NOT NULL").fetchall()
+        except sqlite3.Error:
+            continue
+
+        counts = {}          # (attribute, token) → {video_key, …}
+        channels = {}        # (attribute, token) → {channel, …}
+        for row in rows:
+            vk = reflect.normalize_key(row[0])
+            # `_is_structured` earns its keep twice here: a palette and a
+            # loudness curve both live in this column beside the words.
+            if vk not in videos or _is_structured(row[2]):
+                continue
+            tok = _clean_token(row[2])
+            if not tok:
+                continue
+            slot = (str(row[1]), tok)
+            counts.setdefault(slot, set()).add(vk)
+            if chan_col:
+                channels.setdefault(slot, set()).add(str(row[3] or ""))
+        _mine_attrs(table, value_col, attr_col, counts, channels,
+                    videos, add_node, add_edge)
 
     # Degree is the only ranking signal that needs no configuration, and it is
     # the right one: the nodes worth showing first are the ones that connect
@@ -625,6 +797,14 @@ def find(conn: sqlite3.Connection, query: str, limit: int = 30) -> list:
     Plain LIKE rather than FTS: labels are short, there are tens of thousands
     at most, and a substring match is what a person expects when they type
     half a creator's name.
+
+    An attribute node also answers to its property. `metronomic` is the label
+    and `rhythm` is the property, and *rhythm* is the word somebody types when
+    they do not yet know what values the archive holds — a search that answered
+    nothing to it would be hiding the whole group behind a value you have to
+    guess first. Only for `attr`: a tag's `sub` is a column name, and matching
+    that would return every object in the archive to somebody who typed the
+    name of the column they came out of.
     """
     q = (query or "").strip()
     if not q:
@@ -636,8 +816,9 @@ def find(conn: sqlite3.Connection, query: str, limit: int = 30) -> list:
         cur = conn.execute(
             "SELECT id, kind, label, sub, weight, meta FROM graph_nodes "
             "WHERE LOWER(label) LIKE ? "
+            "   OR (kind = 'attr' AND LOWER(sub) LIKE ?) "
             "ORDER BY (CASE WHEN LOWER(label) LIKE ? THEN 0 ELSE 1 END), "
-            "         weight DESC LIMIT ?", (like, starts, limit))
+            "         weight DESC LIMIT ?", (like, like, starts, limit))
     except sqlite3.Error:
         return []
     out = []
@@ -682,6 +863,27 @@ def detail(conn: sqlite3.Connection, node_id: str, rows: int = 40) -> dict:
             conn,
             f'SELECT * FROM {_q(table)} WHERE LOWER({_q(column)}) LIKE ?',
             (f"%{str(token).lower()}%",), rows)
+        out["records"] = [{"table": table, "rows": rec}] if rec else []
+
+    elif parsed["kind"] == "attr":
+        # The two-column read a tag node cannot express. `rhythm` is a value of
+        # `claim.kind`, not a column, so borrowing the tag branch above would
+        # emit `WHERE LOWER("rhythm") LIKE …` against a table that has no such
+        # column and answer a real question with an empty panel. Both halves of
+        # the pair are matched, because a property is what makes the value mean
+        # anything: `wide` under `dynamic_range` is a different assertion from
+        # `wide` under an aspect ratio, and the rows behind the node are only
+        # the ones that asserted this pair.
+        table = node["meta"].get("table") or parsed.get("table")
+        column = node["meta"].get("column") or "value"
+        attr_column = node["meta"].get("attribute_column") or "kind"
+        attribute = node["meta"].get("attribute") or parsed.get("attribute")
+        token = node["meta"].get("token") or parsed.get("token")
+        rec = _rows(
+            conn,
+            f'SELECT * FROM {_q(table)} WHERE LOWER({_q(attr_column)}) = ? '
+            f'AND LOWER({_q(column)}) LIKE ?',
+            (str(attribute).lower(), f"%{str(token).lower()}%"), rows)
         out["records"] = [{"table": table, "rows": rec}] if rec else []
 
     elif parsed["kind"] == "video":
@@ -733,9 +935,11 @@ def edge_detail(conn: sqlite3.Connection, src: str, dst: str, rel: str,
         return out
     vkey = src_parsed["key"]
     rows = max(1, min(int(rows or 20), 100))
+    dst_kind = (b or {}).get("kind")
+    dst_meta = (b or {}).get("meta") or {}
 
     if len(parts) >= 3 and not parts[2].startswith("#") and \
-            b.get("kind") == "dim":
+            dst_kind == "dim":
         found = _rows(conn,
                       f'SELECT * FROM {_q(table)} WHERE {_q(key_col)} = ? '
                       f'AND {_q(column)} = ?', (vkey, parts[2]), rows)
@@ -744,6 +948,26 @@ def edge_detail(conn: sqlite3.Connection, src: str, dst: str, rel: str,
                           f'SELECT * FROM {_q(table)} WHERE {_q(key_col)} '
                           f'LIKE ? AND {_q(column)} = ?',
                           (f"%{vkey}", parts[2]), rows)
+    elif dst_kind == "attr" and len(parts) >= 3:
+        # The property has to be in the query as well as the value. `ref` cannot
+        # carry it — it is `table|column|value` everywhere else in this module —
+        # but the node knows it, and `rel` is the attribute name for exactly
+        # these edges. Without it the answer to *"why is this reel metronomic?"*
+        # is every claim about that reel whose value contains the word.
+        attr_column = dst_meta.get("attribute_column") or "kind"
+        attribute = str(dst_meta.get("attribute") or rel).lower()
+        needle = f"%{parts[2].lower()}%"
+        found = _rows(conn,
+                      f'SELECT * FROM {_q(table)} WHERE {_q(key_col)} = ? '
+                      f'AND LOWER({_q(attr_column)}) = ? '
+                      f'AND LOWER({_q(column)}) LIKE ?',
+                      (vkey, attribute, needle), rows)
+        if not found:
+            found = _rows(conn,
+                          f'SELECT * FROM {_q(table)} WHERE {_q(key_col)} '
+                          f'LIKE ? AND LOWER({_q(attr_column)}) = ? '
+                          f'AND LOWER({_q(column)}) LIKE ?',
+                          (f"%{vkey}", attribute, needle), rows)
     else:
         needle = parts[2] if len(parts) >= 3 else ""
         found = _rows(conn,

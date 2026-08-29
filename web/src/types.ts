@@ -290,10 +290,11 @@ export interface TableResponse {
 /**
  * `/api/graph*`
  *
- * Four kinds and nothing else: `atlas/graph.py:rebuild()` writes `video`, `dim`,
- * `tag` and `hashtag`. `sub` means something different in each — the dimension
- * *table* for a dim, the *column* it was mined from for a tag — which is why
- * `lib/kinds.ts` and not a view decides how a node is labelled and coloured.
+ * Five kinds and nothing else: `atlas/graph.py:rebuild()` writes `video`, `dim`,
+ * `tag`, `attr` and `hashtag`. `sub` means something different in each — the
+ * dimension *table* for a dim, the *column* it was mined from for a tag, the
+ * *property* it is a value of for an attr — which is why `lib/kinds.ts` and not
+ * a view decides how a node is labelled and coloured.
  *
  * `weight` on a node is its **summed degree**, not a confidence or a count of
  * anything a person would recognise: it is how much of the archive this node

@@ -2,14 +2,15 @@
  * lib/kinds.ts — the graph's node kinds, and the one place they become a colour.
  *
  * These four kinds are not a guess. `atlas/graph.py:rebuild()` writes exactly
- * `video`, `dim`, `tag` and `hashtag` into `graph_nodes`, and puts something
- * different in `sub` for each one:
+ * `video`, `dim`, `tag`, `attr` and `hashtag` into `graph_nodes`, and puts
+ * something different in `sub` for each one:
  *
  *   | kind     | `sub` holds            | what it is                            |
  *   |----------|------------------------|---------------------------------------|
  *   | video    | `"videos"`             | a reel                                |
  *   | dim      | the dimension *table*  | a row a reel points at by foreign key |
  *   | tag      | the *column* it came from | a value repeated across ≥2 reels   |
+ *   | attr     | the *property* named in the row | one value of it, shared by ≥2 reels |
  *   | hashtag  | `"hashtags"`           | a `#word` mined out of the text       |
  *
  * `lib/channels.ts` owns the rule that a hue identifies **which observer made a
@@ -19,6 +20,10 @@
  *     column)`, the same string the search results colour by. So a tag mined
  *     from the transcript is speech-blue here *and* in the drawer, which is the
  *     whole point of having a palette at all.
+ *   - An **attr** node carries the same key and is coloured the same way, but it
+ *     reads the observer off the claim's own `channel` column rather than off the
+ *     column name — a loudness reading and a palette both live in `claim.value`,
+ *     and only the row knows which is which.
  *   - A **video** is not a claim, it is the thing claims are about, so it gets an
  *     ink tone and never a channel hue.
  *   - A **dim** row is platform-declared structure, not an observation.
@@ -51,7 +56,7 @@ export interface KindedNode {
 export function nodeProp(n: KindedNode): string {
   const kind = String(n.kind || '').toLowerCase();
 
-  if (kind === 'tag') {
+  if (kind === 'tag' || kind === 'attr') {
     const src = n.meta?.source;
     // Only claim a channel when the node actually records one.
     if (typeof src === 'string' && src) return `--ch-${channelOf(src)}`;
@@ -79,6 +84,9 @@ export const nodeCss = (n: KindedNode): string => `var(${nodeProp(n)})`;
  * `objects` column is an "objects" value. Singularised crudely — trailing `s`
  * off a table name is right far more often than it is wrong, and it only ever
  * affects a caption.
+ *
+ * `attr` is the same trick with a better `sub`: the node's own property name, so
+ * a node labelled `metronomic` is typed `rhythm` and the two read as one phrase.
  */
 export function nodeTypeLabel(n: KindedNode): string {
   const kind = String(n.kind || '').toLowerCase();
@@ -87,6 +95,7 @@ export function nodeTypeLabel(n: KindedNode): string {
   if (kind === 'hashtag') return 'hashtag';
   if (kind === 'dim') return sub ? sub.replace(/s$/, '') : 'row';
   if (kind === 'tag') return sub || 'tag';
+  if (kind === 'attr') return sub || 'attribute';
   return kind || 'node';
 }
 
@@ -102,6 +111,12 @@ export function nodeNote(n: KindedNode): string {
     const observer =
       typeof src === 'string' && src ? ` — ${CHANNEL_MEANING[channelOf(src)]}` : '';
     return `a value that repeats across reels in ${sub || 'a text column'}${observer}`;
+  }
+  if (kind === 'attr') {
+    const src = n.meta?.source;
+    const observer =
+      typeof src === 'string' && src ? ` — ${CHANNEL_MEANING[channelOf(src)]}` : '';
+    return `every reel whose ${sub || 'property'} was measured as this${observer}`;
   }
   if (kind === 'hashtag') return 'a #hashtag found in the text';
   if (CHANNEL_SET.has(kind)) return CHANNEL_MEANING[kind as ChannelName];

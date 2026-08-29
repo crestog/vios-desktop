@@ -62,7 +62,12 @@ MOMENTS_IN_PLAN = 5       # watch material carried in the plan itself
 MOMENTS_IN_STEP = 24      # …and in one step's drill-down
 SCOPE_CAP       = 400     # videos a goal search may pull into scope
 KEYS_PER_LOOKUP = 180     # keys per moment query, well under the variable limit
-CONCEPT_KINDS   = ("tag", "hashtag")
+# Which graph nodes can be a step. A video is what you watch, not what you
+# learn, and a dimension row is a fact about who posted it. `attr` is here
+# because a property's value — `rhythm = metronomic` — is the only concept a
+# local archive has before anyone has written a caption or a transcript; leave
+# it out and the plan is empty on exactly the library this application is for.
+CONCEPT_KINDS   = ("tag", "hashtag", "attr")
 POINT_WIDTH_S   = 2.5     # a frame note has no end; give it one so it can play
 CACHE_MAX       = 8
 
