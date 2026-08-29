@@ -56,9 +56,25 @@ _KEY_NAMES = ("videouuid", "videokey", "mediakey", "msgid", "videoid",
               "video", "uuid", "mediaid")
 _START_NAMES = ("startt", "startsec", "starttime", "tstart", "start",
                 "tssec", "timestamp", "ts", "time", "sec", "seconds",
-                "offset", "position", "t0")
+                "offset", "position", "t0", "framet")
 _END_NAMES = ("endt", "endsec", "endtime", "tend", "end", "stop", "until",
-              "t1")
+              "t1", "framet1")
+# `frame_t` / `frame_t1` are last on purpose, and they are here because their
+# absence was silently costing every timed moment in the index. The evidence
+# store stamps a frame claim with the frame it starts on *and* the presentation
+# timestamp that frame was decoded at — `frame_t`, in seconds — and that is the
+# only time a speech segment, an OCR run or a frame note carries: the canonical
+# `claim` table has no `t0`/`t1` at all. Without these two names `time_columns`
+# returned `("", "")` for `claim`, so the indexer read every row as untimed,
+# `moments.t_start` came out NULL for all 87 of them, and a search hit could not
+# seek because nothing knew when it happened. Only the early fixture's schema,
+# which nothing writes anymore, was ever timed.
+#
+# Last rather than first so a table carrying both a plain span and a frame stamp
+# keeps the span: `t0` is what the row is about, `frame_t` is where it was
+# sampled. `frame_idx` and `frame_hi` are deliberately not here — they are frame
+# numbers, and a moment at t=142s because it was frame 142 is worse than one
+# with no time at all.
 
 # Wall-clock columns. A row's insert time is not a position in a video, and
 # treating it as one puts every moment at t=1.75 billion seconds.
@@ -260,14 +276,32 @@ def cell_value(value):
     return value
 
 
+# Bumped when the rules below start reading the same schema differently.
+#
+# The fingerprint used to hash only the schema, which is correct as long as a
+# fixed set of rules is being applied to it — a new column changes the hash and
+# the index picks the column up. It is wrong the moment the rules themselves
+# move: adding `frame_t` to `_START_NAMES` and teaching `time_link` to borrow a
+# shot's span means the *same* tables now yield times they did not yield before,
+# and an install whose `moments` table was already built would keep every
+# `t_start` NULL for good. Nothing would ever ask again. So the version of the
+# rules is part of what the index was built from, and it belongs in the hash.
+#
+# 1 → the original schema-only hash.
+# 2 → `frame_t`/`frame_t1` recognised as times; `shot_idx` borrows `shot.t0/t1`.
+_RULES_VERSION = 2
+
+
 def fingerprint(conn: sqlite3.Connection) -> str:
-    """A hash of the schema's shape.
+    """A hash of the schema's shape and the rules read against it.
 
     The indexer stores this alongside the moment table. When it differs, the
     schema moved and the index is rebuilt — which is how a new column becomes
-    searchable without anyone editing code or pressing anything.
+    searchable without anyone editing code or pressing anything. `_RULES_VERSION`
+    is folded in so the reverse also holds: when the extraction rules change, one
+    rebuild happens on next boot without anyone knowing they needed to ask.
     """
-    parts = []
+    parts = [f"rules={_RULES_VERSION}"]
     for t in tables(conn):
         cols = ",".join(f"{c['name']}:{c['type']}" for c in columns(conn, t))
         parts.append(f"{t}({cols})")
@@ -453,6 +487,64 @@ def dimension_links(conn: sqlite3.Connection, table: str, cols: list) -> list:
     return links
 
 
+# A row that says which shot it belongs to, in a table that keeps no clock of
+# its own. Named exactly rather than by convention: `shot_idx` is a position in
+# a list, so a generic "any *_idx points at a table" rule would happily join
+# `ordinal` or `frame_idx` to something and put moments at the wrong second.
+_SHOT_LINK = "shotidx"
+
+
+def time_link(conn: sqlite3.Connection, table: str, cols: list,
+              key: str, start: str = "", end: str = "") -> dict:
+    """Times a table can borrow from the shot each row points at, or {}.
+
+    The canonical evidence schema keeps no `t0`/`t1` on `claim`: a claim is
+    placed by `shot_idx`, and the seconds live on `shot`. Without this the
+    indexer reads every per-shot observation as untimed — on a database built
+    entirely by shard replay, which is the only thing a new machine has, that
+    was 87 of 87 moments with a NULL `t_start` and a Studio timeline with
+    nothing on it. `studio._claims` does this same join to keep an entity
+    clickable; doing it here is what makes a *search hit* seekable.
+
+    When the table has a start of its own, the shot is a fallback rather than a
+    replacement — `COALESCE(frame_t, s.t0)` — because the two coexist in
+    production: a speech segment carries the timestamp of the frame it was
+    decoded at, and a shot-level loudness reading carries only its shot. The end
+    is taken from the shot *only* when the start was, so a point claim with no
+    `frame_t1` is not stretched across the whole shot it happens to fall in.
+
+    Returns `{"join", "start", "end", "via", "via_end"}` — the first three SQL
+    fragments against alias `t`, the last two the plain-language origin the
+    Admin tab prints in place of a column name — or `{}` when there is nothing
+    to borrow.
+    """
+    if start and end:
+        return {}                       # the row already knows its own span
+    by_norm = {_norm(c["name"]): c["name"] for c in cols}
+    local = by_norm.get(_SHOT_LINK)
+    if not local or not key:
+        return {}
+    shot = {_norm(t): t for t in tables(conn)}.get("shot")
+    if not shot or shot == table:
+        return {}
+    scols = columns(conn, shot)
+    snames = {_norm(c["name"]): c["name"] for c in scols}
+    s_key = key_column(scols)
+    if not all(n in snames for n in ("idx", "t0", "t1")) or not s_key:
+        return {}
+    return {
+        "join": (f' LEFT JOIN {_q(shot)} s ON s.{_q(s_key)} = t.{_q(key)}'
+                 f' AND s.{_q(snames["idx"])} = t.{_q(local)}'),
+        "start": (f'COALESCE(t.{_q(start)}, s.{_q(snames["t0"])})' if start
+                  else f's.{_q(snames["t0"])}'),
+        "end": (f'CASE WHEN t.{_q(start)} IS NULL THEN s.{_q(snames["t1"])}'
+                f' ELSE {("t." + _q(end)) if end else "NULL"} END' if start
+                else f's.{_q(snames["t1"])}'),
+        "via": f'{shot}.{snames["t0"]} via {local}',
+        "via_end": f'{shot}.{snames["t1"]} via {local}',
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # THE CATALOG
 # ══════════════════════════════════════════════════════════════════════════
@@ -523,10 +615,25 @@ def text_sources(conn: sqlite3.Connection) -> list:
         start, end = time_columns(cols)
         s_expr = f"t.{_q(start)}" if start else "NULL"
         e_expr = f"t.{_q(end)}" if end else "NULL"
+        # A table with no clock of its own can still be placed if its rows name
+        # the shot they belong to. Resolved before the text loop so every spec
+        # this table produces — one per evidence channel — carries the join.
+        borrow = time_link(conn, table, cols, key, start, end)
+        join = borrow.get("join", "")
+        # `start`/`end` are reported to the Admin tab as where a moment's time
+        # came from, and a borrowed time came from somewhere the row cannot name.
+        # Left as the bare column name when the row has one, so the common case
+        # still reads as a column; described when it does not, because "untimed"
+        # would be a false answer about a source that is now placed on the clock.
+        s_name, e_name = start, end
+        if borrow:
+            s_expr, e_expr = borrow["start"], borrow["end"]
+            s_name = f"{start} → {borrow['via']}" if start else borrow["via"]
+            e_name = e_name or borrow["via_end"]
 
         for text_col in prose_columns(conn, table, cols):
             base = (f"SELECT t.{_q(key)}, {s_expr}, {e_expr}, "
-                    f"t.{_q(text_col)} FROM {_q(table)} t "
+                    f"t.{_q(text_col)} FROM {_q(table)} t{join} "
                     f"WHERE t.{_q(text_col)} IS NOT NULL "
                     f"AND TRIM(t.{_q(text_col)}) <> ''")
 
@@ -540,14 +647,14 @@ def text_sources(conn: sqlite3.Connection) -> list:
                 col, values = labels
                 for val in values:
                     specs.append({
-                        "table": table, "key": key, "start": start, "end": end,
+                        "table": table, "key": key, "start": s_name, "end": e_name,
                         "text": text_col, "source": val, "via": None,
                         "sql": base + f" AND t.{_q(col)} = '{val}'",
                     })
                 continue
 
             specs.append({
-                "table": table, "key": key, "start": start, "end": end,
+                "table": table, "key": key, "start": s_name, "end": e_name,
                 "text": text_col, "source": source_label(table, text_col),
                 "via": None,
                 "sql": base,

@@ -1382,7 +1382,18 @@ function HookPanel({ d }: { d: DeconstructResponse }) {
             )}
           </dd>
           <dt>opens silent</dt>
-          <dd>{h.silent_open ? 'yes' : 'no'}</dd>
+          <dd>
+            {h.silent_open === null ? (
+              // Nothing on this reel is placed on the clock, so there is no t=0
+              // to look at. `no` here would be the answer to a question the
+              // pipeline never got far enough to ask.
+              <span className="cell-null">nothing is timed yet</span>
+            ) : h.silent_open ? (
+              'yes'
+            ) : (
+              'no'
+            )}
+          </dd>
         </dl>
         <div className="stu-quotes">
           {h.text.length ? (
@@ -1447,8 +1458,17 @@ function GapsAndClaims({ d }: { d: DeconstructResponse }) {
                 <button
                   key={`${c.kind}-${c.name}-${i}`}
                   className="stu-claim"
-                  onClick={() => watch(d.video.video_key, c.t0)}
-                  title={`${c.kind} · confidence ${n(c.confidence, 2)} · ${fmtT(c.t0)}–${fmtT(c.t1)}`}
+                  // An untimed claim opens the reel with no `t` at all rather
+                  // than seeking to zero. The two look the same on screen for a
+                  // moment and mean different things: `t=0.00` is a claim that
+                  // this entity appears at the very start, which for a claim the
+                  // server could not place anywhere is a claim it did not make.
+                  onClick={() => watch(d.video.video_key, c.t0 ?? undefined)}
+                  title={
+                    c.t0 === null
+                      ? `${c.kind} · confidence ${n(c.confidence, 2)} · whole reel`
+                      : `${c.kind} · confidence ${n(c.confidence, 2)} · ${fmtT(c.t0)}–${fmtT(c.t1)}`
+                  }
                 >
                   <span className="stu-claim-n">{c.name}</span>
                   <span className="stu-claim-k">{c.kind}</span>

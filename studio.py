@@ -555,12 +555,43 @@ def _video(conn: sqlite3.Connection, key: str) -> dict | None:
     }
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set:
+    """The column names a table actually has, or an empty set if it has none.
+
+    Studio is a pure reader over tables it does not create, and two of them are
+    named differently depending on what created them. A database built by shard
+    replay — the only path that exists on a fresh machine — names the shot
+    boundary confidence `score` and the claim's text `value`, and carries no
+    `t0`/`t1` on `claim` at all; the copy on this laptop was created by an early
+    fixture that called them `scene_score` and `name` and did have times.
+    `ensure_schema` widens but never renames, so both shapes persist and a query
+    written against either one silently reads nothing from the other: `_rows`
+    logs the `OperationalError` at DEBUG and returns `[]`, which the payload then
+    reports as *this reel has no shots and no entities* over a table holding
+    three shots and thirty-seven claims. Probing costs one PRAGMA per call and is
+    the difference between a deconstruction and a blank one.
+
+    Not cached: the first shard to reach a table widens it mid-process, so a set
+    memoised at import would be the pre-widening answer for the life of the app.
+    """
+    try:
+        return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+    except sqlite3.Error:
+        return set()
+
+
 def _shots(conn: sqlite3.Connection, key: str) -> list[tuple[float, float, float]]:
-    """`(t0, t1, scene_score)` in cut order, with the zero-length and inverted
+    """`(t0, t1, score)` in cut order, with the zero-length and inverted
     rows that a detector occasionally emits dropped rather than carried into a
-    mean shot length."""
+    mean shot length. The confidence column is whichever of `score` /
+    `scene_score` this database has — see `_columns`."""
+    cols = _columns(conn, "shot")
+    sc_col = "score" if "score" in cols else ("scene_score" if "scene_score" in cols else None)
+    if not cols:
+        return []
+    pick = f'"{sc_col}"' if sc_col else "NULL"
     out = []
-    for t0, t1, sc in _rows(conn, "SELECT t0, t1, scene_score FROM shot "
+    for t0, t1, sc in _rows(conn, f"SELECT t0, t1, {pick} FROM shot "
                                   "WHERE video_key = ? ORDER BY idx", (key,)):
         a, b = float(t0 or 0.0), float(t1 or 0.0)
         if b > a:
@@ -573,7 +604,20 @@ def _moments(conn: sqlite3.Connection, key: str) -> list[dict]:
 
     `t_end` is coalesced to `t_start` because `meta` and `concept` moments
     describe the whole file and carry no span; treating their absent end as 0
-    would give them negative length and silently subtract from coverage."""
+    would give them negative length and silently subtract from coverage.
+
+    `timed` is the distinction the rest of this file rests on, and it is here
+    because a NULL `t_start` and a `t_start` of zero are not the same claim. A
+    caption belongs to the whole reel; a cut at 0.0s happens at the start. Read
+    as the same number, an untimed channel reports `first_at: 0.0` — evidence at
+    the first frame, which nothing measured — and, worse, `_timeline` names it as
+    a present channel, so a reel whose occupancy matrix is entirely zero still
+    comes back with four channels and one section spanning all of it. That was
+    two of the three reels on this machine: a fabricated section, no gap
+    reported, and `notes` silent, because the note that says *evidence exists but
+    carries no usable timing* was guarded on the channel list being empty and the
+    channel list was built from every source, timed or not.
+    """
     out = []
     for t0, t1, src, tbl, w, txt in _rows(
             conn, "SELECT t_start, COALESCE(t_end, t_start), source, src_table,"
@@ -582,6 +626,7 @@ def _moments(conn: sqlite3.Connection, key: str) -> list[dict]:
         a = float(t0 or 0.0)
         b = max(a, float(t1 or a))
         out.append({"t_start": round(a, 3), "t_end": round(b, 3),
+                    "timed": t0 is not None,
                     "source": src or "meta", "src_table": tbl or "",
                     "weight": float(w or 0.0), "text": txt or ""})
     return out
@@ -590,18 +635,39 @@ def _moments(conn: sqlite3.Connection, key: str) -> list[dict]:
 def _claims(conn: sqlite3.Connection, key: str) -> list[dict]:
     """Named entities the pipeline was willing to assert.
 
+    The text column is `value` on a database built by shard replay and `name` on
+    the early fixture's, and the canonical table has no `t0`/`t1` — a claim is
+    scoped to a shot by `shot_idx` instead, so its span comes from the shot. That
+    join is what keeps a claim clickable on the timeline; without a time the
+    button below it would seek to zero for everything. When neither times nor a
+    shot index exist the claim is returned with `t0`/`t1` as null, which the
+    interface renders as *whole reel* rather than as second zero.
+
     Note for anyone who profiles this: there is no index on `claim(video_key)`
     (only `claim(uid)` is unique), so this is a scan. It is one scan of a small
     table for one reel, which is why it has not been worth adding an index for;
     it would be worth it if this were ever called in a loop over the archive."""
+    cols = _columns(conn, "claim")
+    txt = "value" if "value" in cols else ("name" if "name" in cols else None)
+    if txt is None:
+        return []
+    if "t0" in cols and "t1" in cols:
+        sql = (f'SELECT kind, "{txt}", confidence, t0, t1 FROM claim '
+               "WHERE video_key = ? ORDER BY COALESCE(t0, 0)")
+    elif "shot_idx" in cols and "idx" in _columns(conn, "shot"):
+        sql = (f'SELECT c.kind, c."{txt}", c.confidence, s.t0, s.t1 '
+               "FROM claim c LEFT JOIN shot s "
+               "  ON s.video_key = c.video_key AND s.idx = c.shot_idx "
+               "WHERE c.video_key = ? ORDER BY COALESCE(s.t0, 0), c.ordinal")
+    else:
+        sql = (f'SELECT kind, "{txt}", confidence, NULL, NULL FROM claim '
+               "WHERE video_key = ? ORDER BY ordinal")
     out = []
-    for kind, name, cf, t0, t1 in _rows(
-            conn, "SELECT kind, name, confidence, t0, t1 FROM claim "
-                  "WHERE video_key = ? ORDER BY COALESCE(t0, 0)", (key,)):
+    for kind, name, cf, t0, t1 in _rows(conn, sql, (key,)):
         out.append({"kind": kind or "", "name": name or "",
                     "confidence": round(float(cf or 0.0), 3),
-                    "t0": round(float(t0 or 0.0), 2),
-                    "t1": round(float(t1 or 0.0), 2)})
+                    "t0": None if t0 is None else round(float(t0), 2),
+                    "t1": None if t1 is None else round(float(t1), 2)})
     return out
 
 
@@ -657,7 +723,11 @@ def _channels(moments: list[dict], duration: float) -> list[dict]:
     `share` is covered seconds over runtime, computed on merged intervals — two
     overlapping speech moments cover the time once. It can still exceed 1 for
     `meta` and `concept`, whose moments describe the whole file; that is not a
-    bug to clamp away, it is the reason `covered_s` is printed next to it."""
+    bug to clamp away, it is the reason `covered_s` is printed next to it.
+
+    `first_at`/`last_at` are null for a channel none of whose moments are placed.
+    A caption is about the reel, not about its first frame, and `0.0` there reads
+    as a measurement that was never made."""
     by: dict[str, list[dict]] = {}
     for m in moments:
         by.setdefault(m["source"], []).append(m)
@@ -667,7 +737,8 @@ def _channels(moments: list[dict], duration: float) -> list[dict]:
         ms = by.get(src)
         if not ms:
             continue
-        spans = [(m["t_start"], m["t_end"]) for m in ms]
+        placed = [m for m in ms if m["timed"]]
+        spans = [(m["t_start"], m["t_end"]) for m in placed]
         cov = _covered(spans)
         words = sum(_wordcount(m["text"]) for m in ms)
         chars = sum(len(m["text"]) for m in ms)
@@ -676,8 +747,8 @@ def _channels(moments: list[dict], duration: float) -> list[dict]:
             "moments": len(ms),
             "covered_s": cov,
             "share": round(cov / duration, 3) if duration > 0 else None,
-            "first_at": round(min(m["t_start"] for m in ms), 2),
-            "last_at": round(max(m["t_end"] for m in ms), 2),
+            "first_at": round(min(m["t_start"] for m in placed), 2) if placed else None,
+            "last_at": round(max(m["t_end"] for m in placed), 2) if placed else None,
             "words": words,
             "chars": chars,
             "weight": round(sum(m["weight"] for m in ms), 2),
@@ -699,14 +770,19 @@ def _timeline(moments: list[dict], duration: float,
     if duration <= 0 or bins <= 0:
         return [], [], 0.0
     w = duration / bins
-    present = [c for c in CHANNELS if any(m["source"] == c for m in moments)]
-    present += sorted({m["source"] for m in moments} - set(CHANNELS))
+    # Only channels with a placed moment. A channel that is present in the
+    # evidence but nowhere on the clock has no row to draw: every bin of it would
+    # be zero, and a zero row reads as *this channel was measured and found
+    # absent here* rather than as *this channel was never placed*.
+    timed = [m for m in moments if m["timed"]]
+    present = [c for c in CHANNELS if any(m["source"] == c for m in timed)]
+    present += sorted({m["source"] for m in timed} - set(CHANNELS))
     if not present:
         return [], [[] for _ in range(bins)], w
     mat = [[0.0] * len(present) for _ in range(bins)]
     for ci, src in enumerate(present):
         spans = _union([(m["t_start"], m["t_end"])
-                        for m in moments if m["source"] == src])
+                        for m in timed if m["source"] == src])
         for a, b in spans:
             i0 = max(0, min(bins - 1, int(a / w)))
             i1 = max(0, min(bins - 1, int(math.ceil(b / w)) - 1))
@@ -768,17 +844,23 @@ def _hook(moments: list[dict], shots: list[tuple[float, float, float]],
 
     `first_frame_channels` is separate and stricter: what is on screen at t=0.
     That is the question a person actually asks about a hook, and it is not the
-    same as what happens in the first three seconds."""
+    same as what happens in the first three seconds.
+
+    `silent_open` is null, not false, when no moment on this reel is placed on the
+    clock. "This reel opens on nothing" is a finding; drawing it from a timeline
+    that was never populated is the same sentence with none of the measurement
+    behind it, and the interface prints *unknown* rather than *no*."""
     win = min(HOOK_S, duration) if duration > 0 else HOOK_S
-    inside = [m for m in moments if m["t_start"] < win and m["t_end"] > 0]
-    at_zero = sorted({m["source"] for m in moments
+    placed = [m for m in moments if m["timed"]]
+    inside = [m for m in placed if m["t_start"] < win and m["t_end"] > 0]
+    at_zero = sorted({m["source"] for m in placed
                       if m["t_start"] <= 0.25 and m["t_end"] > 0.0})
     cuts = sum(1 for a, _, _ in shots if 0 < a < win)
     texts = [m for m in inside if m["text"].strip()
              and m["source"] in ("speech", "caption", "ocr", "narrative")]
     words = sum(_wordcount(m["text"]) for m in texts)
     first_speech = next((m["t_start"] for m in moments
-                         if m["source"] == "speech"), None)
+                         if m["source"] == "speech" and m["timed"]), None)
     return {
         "window_s": round(win, 2),
         "moments": len(inside),
@@ -789,7 +871,7 @@ def _hook(moments: list[dict], shots: list[tuple[float, float, float]],
         "words_per_s": round(words / win, 2) if win > 0 else None,
         "first_speech_at": (round(float(first_speech), 2)
                             if first_speech is not None else None),
-        "silent_open": not at_zero,
+        "silent_open": (not at_zero) if placed else None,
         "text": [{"source": m["source"], "t": round(m["t_start"], 2),
                   "text": m["text"][:240]} for m in texts[:6]],
     }
@@ -840,7 +922,12 @@ def deconstruct(conn: sqlite3.Connection, key: str) -> dict:
         notes.append("Neither a duration nor any timed evidence exists for this "
                      "reel, so every time-based number is blank.")
     if len(moments) and not chans:
-        notes.append("Evidence exists but carries no usable timing.")
+        notes.append(f"{_n(len(moments), 'moment')} exist for this reel but not "
+                     "one of them is placed on the clock, so the timeline, the "
+                     "sections and the hook are all blank. Evidence is timed by "
+                     "the frame it was read from or the shot it belongs to; when "
+                     "no pass has written either, the text is searchable but not "
+                     "seekable.")
 
     speech = [m for m in moments if m["source"] == "speech"]
     ocr = [m for m in moments if m["source"] == "ocr"]
@@ -856,7 +943,8 @@ def deconstruct(conn: sqlite3.Connection, key: str) -> dict:
                      "matrix": mat},
         "sections": _sections(chans, mat, bin_s),
         "hook": _hook(moments, shots, duration),
-        "gaps": _gaps([(m["t_start"], m["t_end"]) for m in moments], duration),
+        "gaps": _gaps([(m["t_start"], m["t_end"])
+                       for m in moments if m["timed"]], duration),
         "claims": claims,
         "density": {
             "words": words,
@@ -999,9 +1087,14 @@ def _load(conn: sqlite3.Connection, keys: list[str]) -> dict[str, dict]:
             v = out.get(k)
             if v is None:
                 continue
+            # `timed` for the same reason `_moments` carries it: an untimed
+            # moment is about the whole reel, and the hook aggregate below splits
+            # text into hook and rest by comparing `t_start` to the window. Read
+            # as zero, every caption in the archive counts as hook language.
+            placed = a is not None
             a = float(a or 0.0)
             v["moments"].append({"t_start": a, "t_end": max(a, float(b or a)),
-                                 "source": src or "meta",
+                                 "timed": placed, "source": src or "meta",
                                  "weight": float(w or 0.0), "text": txt or ""})
     # A reel with evidence but no recorded duration would divide by zero in every
     # rate below, so it gets the same evidence-derived runtime `deconstruct` uses.
@@ -1095,16 +1188,25 @@ def _hook_agg(loaded: dict[str, dict]) -> dict:
     Rates are over the reels that could answer, and the denominator is reported
     with every one of them. "62% open on a caption" means 62% of the reels that
     have any evidence at t=0, and stating the denominator is the difference
-    between that and a claim about the whole scope."""
+    between that and a claim about the whole scope.
+
+    Every number here is a statement about a timeline, so a reel with no moment
+    placed on one is not in the denominator. Counting it made the two untimed
+    reels on this machine read as *67% of this scope opens silent*, which is a
+    finding about the openings of reels whose openings were never looked at. The
+    count that dropped out is returned as `untimed` so the caller can say so."""
     opens: dict[str, int] = {}
     leads: dict[str, int] = {}
     words, cuts, first_speech = [], [], []
-    silent, answerable = 0, 0
+    silent, answerable, untimed = 0, 0, 0
     hook_terms: dict[str, int] = {}
     rest_terms: dict[str, int] = {}
     for v in loaded.values():
         dur = v["duration"]
         if dur <= 0 or not v["moments"]:
+            continue
+        if not any(m["timed"] for m in v["moments"]):
+            untimed += 1
             continue
         answerable += 1
         win = min(HOOK_S, dur)
@@ -1128,6 +1230,13 @@ def _hook_agg(loaded: dict[str, dict]) -> dict:
         for m in v["moments"]:
             if not m["text"].strip():
                 continue
+            # An untimed moment is on neither side of the window. Its text
+            # describes the whole reel, so calling it hook language overstates the
+            # opening and calling it body language understates it; the lift below
+            # is a comparison between two halves of a timeline, and a row with no
+            # place on that timeline is not evidence about either half.
+            if not m["timed"]:
+                continue
             grams = _grams(m["text"])
             if m["t_start"] < win:
                 w += _wordcount(m["text"])
@@ -1138,11 +1247,13 @@ def _hook_agg(loaded: dict[str, dict]) -> dict:
                     rest_terms[g] = rest_terms.get(g, 0) + 1
         words.append(w)
         cuts.append(sum(1 for a, _ in v["shots"] if 0 < a < win))
-        fs = next((m["t_start"] for m in v["moments"] if m["source"] == "speech"), None)
+        fs = next((m["t_start"] for m in v["moments"]
+                   if m["source"] == "speech" and m["timed"]), None)
         if fs is not None:
             first_speech.append(float(fs))
     return {
         "reels": answerable,
+        "untimed": untimed,
         "opens_with": [{"source": s, "n": n,
                         "rate": round(n / answerable, 3) if answerable else None}
                        for s, n in sorted(opens.items(), key=lambda kv: -kv[1])],
@@ -1190,6 +1301,14 @@ def patterns(conn: sqlite3.Connection, goal: str = "", creator: str = "",
             notes.append(f"{no_ms} of {_n(len(rows), 'reel')} "
                          f"{'carries' if no_ms == 1 else 'carry'} no evidence "
                          f"yet.")
+        hook = _hook_agg(loaded)
+        if hook["untimed"]:
+            u = hook["untimed"]
+            notes.append(f"{u} of {_n(len(rows), 'reel')} "
+                         f"{'has' if u == 1 else 'have'} evidence that is not "
+                         f"placed on a timeline, so {'it is' if u == 1 else 'they are'} "
+                         f"absent from every opening number. The openings are not "
+                         f"silent; they were never looked at.")
 
         # Channel presence: how often a channel appears at all, and how much of
         # the runtime it holds when it does. Both, because `style` is present in
@@ -1243,7 +1362,7 @@ def patterns(conn: sqlite3.Connection, goal: str = "", creator: str = "",
                 "speech_share": _dist(rows, "speech_share"),
             },
             "channels": chans,
-            "hook": _hook_agg(loaded),
+            "hook": hook,
             "bands": {"pace": pace_band, "talk": talk_band},
             "archetypes": archetypes,
             "reel_rows": rows[:60],

@@ -1428,8 +1428,14 @@ export interface ChannelPresence {
   covered_s: number;
   /** Merged covered seconds over runtime. Exceeds 1 for whole-file channels. */
   share: number | null;
-  first_at: number;
-  last_at: number;
+  /**
+   * When the channel's earliest and latest placed moment happen, or null when
+   * none of its moments is placed on the clock at all. A caption belongs to the
+   * whole reel rather than to its first frame, so `0` there would be a
+   * measurement nothing made.
+   */
+  first_at: number | null;
+  last_at: number | null;
   words: number;
   chars: number;
   weight: number;
@@ -1460,7 +1466,8 @@ export interface StudioHook {
   words: number;
   words_per_s: number | null;
   first_speech_at: number | null;
-  silent_open: boolean;
+  /** Null when nothing on this reel is placed on the clock — unmeasured, not no. */
+  silent_open: boolean | null;
   text: Array<{ source: string; t: number; text: string }>;
 }
 
@@ -1512,7 +1519,20 @@ export interface DeconstructResponse {
   sections: StudioSection[];
   hook: StudioHook;
   gaps: Array<{ t0: number; t1: number; len: number }>;
-  claims: Array<{ kind: string; name: string; confidence: number; t0: number; t1: number }>;
+  /**
+   * Named things, timed where the evidence says when. `t0`/`t1` are null for a
+   * claim the server could not place on the timeline: the fresh schema keeps no
+   * times on `claim` and links to a shot instead, so a claim written before its
+   * shot existed — or one that is genuinely about the reel rather than a moment
+   * in it — arrives untimed. Null means *whole reel*, not second zero.
+   */
+  claims: Array<{
+    kind: string;
+    name: string;
+    confidence: number;
+    t0: number | null;
+    t1: number | null;
+  }>;
   density: {
     words: number;
     words_per_s: number | null;
@@ -1586,8 +1606,13 @@ export interface PatternsResponse {
     share: Stats;
   }>;
   hook: {
-    /** Denominator for every rate below. */
+    /** Denominator for every rate below: reels with at least one placed moment. */
     reels: number;
+    /**
+     * Reels dropped from that denominator because nothing in them is placed on a
+     * timeline. `notes` carries the sentence; this is the count behind it.
+     */
+    untimed: number;
     opens_with: Array<{ source: string; n: number; rate: number | null }>;
     leads_with: Array<{ source: string; n: number; rate: number | null }>;
     silent_open: { n: number; rate: number | null };
