@@ -108,6 +108,15 @@ export default function Card({
   const uploads = (video.messages || []).length;
   const twin = (video.twin_of || []).length > 0;
 
+  // The answer, on the card, in the last row — and only when there is a question.
+  // A result that says `style` names the pipeline stage that found it, which is
+  // the one thing the person searching already knows; `the dominant colour is
+  // orange` is what they asked. Browsing the library there is no question, so the
+  // row goes back to being chips. One line and clipped, never wrapped: the whole
+  // passage is one click away in the player, and a card that grows to four lines
+  // of prose is the wall of text this rule exists to prevent.
+  const answer = (video.best?.text || '').trim();
+
   const clearTimer = () => {
     if (timer.current !== null) {
       window.clearTimeout(timer.current);
@@ -226,9 +235,13 @@ export default function Card({
             {typeof video.likes === 'number' && (
               <span className="card-likes">♥ {fmtCompact(video.likes)}</span>
             )}
-            {typeof video.moment_count === 'number' && video.moment_count > 0 && (
+            {!answer && typeof video.moment_count === 'number' && video.moment_count > 0 && (
+              // How much is known about a reel is a browsing signal: it tells you
+              // where there is something to find. Once a search has answered,
+              // the answer is the row below and this number is only competing
+              // with the creator's name for the same pixels.
               <span className="card-moments">
-                {plural(video.moment_count, 'claim', 'claims', fmtCompact)}
+                {plural(video.moment_count, 'moment', 'moments', fmtCompact)}
               </span>
             )}
             {(twin || uploads > 1) && (
@@ -244,24 +257,37 @@ export default function Card({
               </span>
             )}
           </div>
-          {(shelves.length > 0 || channels.length > 0) && (
-            <div className="card-chips">
-              {shelves.slice(0, SHELF_MAX).map((c) => (
-                <span key={`shelf:${c}`} className="card-shelf" title={`saved in ${c}`}>
-                  {c}
-                </span>
-              ))}
-              {shelves.length > SHELF_MAX && (
-                <span className="card-shelf" title={shelves.join(', ')}>
-                  +{shelves.length - SHELF_MAX}
-                </span>
-              )}
-              {channels.map((c) => (
-                <span key={c} className={chipClass(c)}>
-                  {c}
-                </span>
-              ))}
+          {answer ? (
+            <div
+              className="card-answer"
+              title={
+                shelves.length > 0
+                  ? `${answer}\nsaved in ${shelves.join(', ')}`
+                  : answer
+              }
+            >
+              {answer}
             </div>
+          ) : (
+            (shelves.length > 0 || channels.length > 0) && (
+              <div className="card-chips">
+                {shelves.slice(0, SHELF_MAX).map((c) => (
+                  <span key={`shelf:${c}`} className="card-shelf" title={`saved in ${c}`}>
+                    {c}
+                  </span>
+                ))}
+                {shelves.length > SHELF_MAX && (
+                  <span className="card-shelf" title={shelves.join(', ')}>
+                    +{shelves.length - SHELF_MAX}
+                  </span>
+                )}
+                {channels.map((c) => (
+                  <span key={c} className={chipClass(c)}>
+                    {c}
+                  </span>
+                ))}
+              </div>
+            )
           )}
         </div>
       )}

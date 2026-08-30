@@ -64,7 +64,7 @@ export default function StatusBar() {
           href={href('library')}
           title={
             archive
-              ? `${plural(archive.moments as number, 'claim')} about ${plural(
+              ? `${plural(archive.moments as number, 'moment')} about ${plural(
                   archive.videos as number,
                   'reel'
                 )}`
@@ -72,7 +72,7 @@ export default function StatusBar() {
           }
         >
           {plural(archive?.videos as number, 'reel')} ·{' '}
-          {plural(archive?.moments as number, 'claim')}
+          {plural(archive?.moments as number, 'moment')}
         </a>
 
         {archive?.dense_ready !== undefined && (

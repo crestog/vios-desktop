@@ -161,7 +161,7 @@ export default function ResultRows({
                 )}
                 {!all.length && typeof v.moment_count === 'number' && (
                   <li className="rrow-more">
-                    {plural(v.moment_count, 'claim', 'claims', fmtCompact)} on record
+                    {plural(v.moment_count, 'moment', 'moments', fmtCompact)} on record
                   </li>
                 )}
               </ul>

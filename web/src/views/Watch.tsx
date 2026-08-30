@@ -438,7 +438,7 @@ export default function WatchView({ route }: ViewProps) {
             <div className="rail-head">
               <span className="view-title">Evidence</span>
               <span className="spacer" />
-              <span className="view-sub">{plural(moments.length, 'claim', 'claims', fmtCompact)}</span>
+              <span className="view-sub">{plural(moments.length, 'moment', 'moments', fmtCompact)}</span>
             </div>
 
             {tally.length > 0 && (

@@ -154,7 +154,7 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
                 </dd>
               </>
             )}
-            <dt>claims</dt>
+            <dt>moments</dt>
             <dd>{fmtCompact(moments.length || meta?.moment_count || 0)}</dd>
             {messages.length > 1 && (
               <>

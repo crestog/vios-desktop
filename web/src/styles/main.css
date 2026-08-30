@@ -3176,6 +3176,21 @@ tr:has(.js-deferred) .ej-reason { color: var(--text-secondary); }
   font-size: 8.5px;
   line-height: 15px;
 }
+/* The matched passage, in the row the chips would otherwise have. Exactly the
+   same 15 px, because the footer is 70 px and `VirtualGrid.FOOT_H` says so in
+   JavaScript — a second line here would misplace every row below it. Clipped and
+   never wrapped: this is the one-line answer, and the passage it was cut from is
+   one click away in the player. */
+.card-answer {
+  flex: 0 0 auto;
+  height: 15px;
+  line-height: 15px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A collection this reel is filed under, sharing that same row rather than
    taking a fourth one the footer has no pixels for. Grey by rule: the nine chip
    colours mean "this evidence came from that observer", and where the *person*
