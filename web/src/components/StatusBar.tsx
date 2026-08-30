@@ -34,7 +34,11 @@ export default function StatusBar() {
 
   const gpu = host?.gpus?.[0];
   const freeGb = disk ? disk.free_bytes / GB : null;
-  const lowDisk = disk?.below_floor || (freeGb !== null && freeGb < (disk?.free_floor_gb ?? 8));
+  // The fallback has to match `paths.FREE_FLOOR_GB`, which is 12. It said 8 —
+  // reachable only if the endpoint ever stops sending the field, and wrong by
+  // 4 GB if it does, so the strip would call a low disk healthy at exactly the
+  // moment the mirror had already stopped writing to it.
+  const lowDisk = disk?.below_floor || (freeGb !== null && freeGb < (disk?.free_floor_gb ?? 12));
 
   // torch reports the full marketing name — "NVIDIA GeForce RTX 3050 6GB Laptop
   // GPU" — which is 38 characters of which 15 are the vendor saying its own name
