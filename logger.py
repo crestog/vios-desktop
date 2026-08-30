@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -114,7 +115,83 @@ def _append_file(line: str) -> None:
         pass
 
 
+# ── Credential redaction ──────────────────────────────────────────────────
+# A log line may say *which* secret was involved and must never say what it was.
+# Both halves matter: `[BOT_TOKEN]` tells the operator exactly which credential
+# to look at, which is the entire diagnostic value the raw string ever had.
+#
+# This exists because of a real leak, and the shape of that leak is why the fix
+# lives here rather than in the callers. Nobody wrote a line containing a token.
+# `requests` and `httpx` both put the full request URL into their own exception
+# messages, so `getMe: ConnectError` reached the log — and the rotating file on
+# disk — as `https://api.telegram.org/bot<id>:<secret>/getMe`. Any caller that
+# ever formats an exception is a leak, so the choke point is the only place that
+# can be made safe once.
+_REDACT_FIELDS = ("BOT_TOKEN", "API_HASH", "HF_TOKEN", "IG_COOKIES")
+
+# Matched by shape as well as by value, so a stale token still sitting inside an
+# exception raised before a rotation is caught even though `config` no longer
+# knows it. `{20,}` is well under a real token's secret half (35 chars) and well
+# above anything in a path segment that could be mistaken for one.
+_TOKEN_RE = re.compile(r"/bot(\d{5,}:)?[A-Za-z0-9_-]{20,}")
+_BARE_TOKEN_RE = re.compile(r"\b\d{7,12}:[A-Za-z0-9_-]{30,}\b")
+
+_secrets: tuple = ()
+_secrets_at = 0.0
+_SECRETS_TTL = 5.0          # matches config's own credential-file cache
+
+
+def _live_secrets() -> tuple:
+    """Current credential values, cached briefly.
+
+    `config` is imported lazily because `logger` is the module everything else
+    imports first; a top-level import here would make the credential layer a
+    prerequisite for printing a line. Re-read rather than snapshotted, so a token
+    typed into the Admin form is redacted from the very next log line without a
+    restart — and a token that was rotated stops being redacted only after it has
+    stopped being a secret.
+    """
+    global _secrets, _secrets_at
+    now = time.monotonic()
+    if now - _secrets_at < _SECRETS_TTL:
+        return _secrets
+    found = []
+    try:
+        import config as _config
+        for name in _REDACT_FIELDS:
+            try:
+                val = getattr(_config, name, "")
+            except Exception:
+                continue
+            if isinstance(val, str) and len(val.strip()) >= 8:
+                found.append((val.strip(), f"[{name}]"))
+    except Exception:
+        pass
+    # Longest first, so a value that contains another is replaced whole.
+    found.sort(key=lambda pair: -len(pair[0]))
+    _secrets = tuple(found)
+    _secrets_at = now
+    return _secrets
+
+
+def redact(text: str) -> str:
+    """Replace credential values with their credential names."""
+    out = text
+    for value, name in _live_secrets():
+        if value in out:
+            out = out.replace(value, name)
+    out = _TOKEN_RE.sub("/bot[BOT_TOKEN]", out)
+    return _BARE_TOKEN_RE.sub("[BOT_TOKEN]", out)
+
+
 def vios_log(message, subsystem: str = "SYS", level: str = "INFO") -> None:
+    # Redacted once, at the top, so every downstream copy of the line is clean:
+    # the console, the ring buffer the Admin view polls, and the rotating file on
+    # disk. Doing it in each caller instead would mean every future `log(...)` is
+    # a chance to leak, and the leak this fixes was not written by a caller at
+    # all — an HTTP client put the request URL, token and all, into its own
+    # exception message.
+    message = redact(str(message))
     ts = time.strftime("%H:%M:%S")
     prefix = SUBSYSTEMS.get(subsystem, f"[{subsystem}]")
     icon = LEVELS.get(level, "")
@@ -126,7 +203,7 @@ def vios_log(message, subsystem: str = "SYS", level: str = "INFO") -> None:
         "time": time.time(),
         "subsystem": subsystem,
         "level": level,
-        "message": str(message),
+        "message": message,
     }
     with _lock:
         LOG_BUFFER.append(entry)

@@ -23,18 +23,20 @@
  * because a table of forty rows is not worth pushing through the status strip.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Cpu, HardDrive, Network, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import type { ViewProps } from '../lib/router';
 import { go, href } from '../lib/router';
 import {
   getComponents,
   getEngineJobs,
+  getMirrorBacklog,
   pauseEngine,
   resumeEngine,
   startEngine,
+  verifyMirror,
 } from '../lib/api';
-import { refreshHost, refreshTelemetry, useDisk, useEngine, useHost } from '../lib/store';
+import { refreshHost, refreshTelemetry, useDisk, useEngine, useHost, useMirror } from '../lib/store';
 import { useFetch, type FetchState } from '../lib/useFetch';
 import { clip, fmtAgo, fmtBytes, fmtCount, fmtDate } from '../lib/format';
 import type { ComponentCatalogue, ComponentRow, DiskUsage, EngineJob, HostFacts } from '../types';
@@ -195,6 +197,7 @@ export default function EngineView({ route }: ViewProps) {
           <div className="rail-body eng-rail">
             <MachinePanel host={host} />
             <DiskPanel disk={disk} />
+            <MirrorPanel />
             <SystemsSummary cat={cat.data} />
           </div>
         </aside>
@@ -575,6 +578,119 @@ function DiskPanel({ disk }: { disk: DiskUsage | null }) {
     </div>
   );
 }
+
+/**
+ * What the mirror has not finished, and why.
+ *
+ * The player's warning about an underived reel ends with "see the queue" and
+ * links here, so there has to be a queue here to see. Before this the link led
+ * to the *pass* queue, which is a different queue with different rows — a reel
+ * waiting on a download does not appear in `jobs.db` at all, so the honest
+ * answer to "why is this reel not ready" was nowhere on the page.
+ *
+ * Also the home of Re-verify, because the question it answers — "it says thirty
+ * downloaded and I do not believe it" — is a question about this panel's
+ * numbers, and an answer you can ask for beats a number you have to trust.
+ */
+function MirrorPanel() {
+  const mirror = useMirror();
+  const [said, setSaid] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const back = useFetch((signal) => getMirrorBacklog(signal), []);
+  const down = Boolean(
+    mirror?.transport && mirror.transport.available && !mirror.transport.connected
+  );
+
+  if (!mirror) return null;
+  return (
+    <div className="panel eng-panel">
+      <div className="panel-h">
+        <Network size={12} /> Mirror
+        <span className="spacer" />
+        <button
+          className="btn-icon"
+          disabled={busy}
+          title="re-measure every local original against the size Telegram declared"
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await verifyMirror();
+              setSaid(r.note);
+              back.reload();
+            } catch (e) {
+              setSaid(String((e as Error).message || e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <RotateCcw size={12} />
+        </button>
+      </div>
+      <div className="eng-disk-free">
+        <strong>{fmtCount(mirror.verified)}</strong>{' '}
+        <span className="dim">of {fmtCount(mirror.total_videos)} byte-verified</span>
+      </div>
+      <dl className="kv">
+        <dt>on disk</dt>
+        <dd>
+          {fmtCount(mirror.downloaded)}
+          {mirror.unverified > 0 ? ` (${fmtCount(mirror.unverified)} unproven)` : ''}
+        </dd>
+        <dt>derived</dt>
+        <dd>{fmtCount(mirror.derived)}</dd>
+        {mirror.missing > 0 && (
+          <>
+            <dt>to fetch</dt>
+            <dd>{fmtCount(mirror.missing)}</dd>
+          </>
+        )}
+        {mirror.failing > 0 && (
+          <>
+            <dt>retrying</dt>
+            <dd>{fmtCount(mirror.failing)}</dd>
+          </>
+        )}
+        <dt>Telegram</dt>
+        <dd>
+          {!mirror.telegram_ready
+            ? 'no credentials'
+            : down
+              ? `disconnected — ${clip(
+                  mirror.transport?.last_transport_error || mirror.transport?.error || 'dropped',
+                  60
+                )}`
+              : 'connected'}
+        </dd>
+      </dl>
+      {said && (
+        <div className="dim" style={{ marginTop: 6, fontSize: 11 }}>
+          {said}
+        </div>
+      )}
+      {(back.data?.items?.length || 0) > 0 && (
+        <dl className="kv" style={{ marginTop: 8 }}>
+          {back.data!.items.slice(0, 8).map((r) => (
+            <Fragment key={r.key}>
+              <dt>
+                <a className="font-mono" href={href('watch', { key: r.key })}>
+                  {shortKey(r.key)}
+                </a>
+              </dt>
+              <dd title={r.last_error || undefined}>{r.why}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {(back.data?.waiting || 0) > 8 && (
+        <div className="dim" style={{ marginTop: 6, fontSize: 11 }}>
+          and {fmtCount(back.data!.waiting - 8)} more waiting
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function SystemsSummary({ cat }: { cat: ComponentCatalogue | null }) {
   if (!cat) return null;

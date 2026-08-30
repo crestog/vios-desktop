@@ -44,10 +44,32 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import dbhealth
 import paths
 from logger import vios_log as log
 
 SUB = "SYS"
+
+# ══════════════════════════════════════════════════════════════════════════
+# BEFORE ANYTHING OPENS A DATABASE
+# ══════════════════════════════════════════════════════════════════════════
+# At module scope, and above `create_app`, because `create_app` imports
+# `atlas.server` and a router import can reach a `connect()` while it is still
+# being imported. A check that runs after the first connection is a check that
+# runs after the crash it exists to prevent.
+#
+# What it prevents, measured: `atlas.db` reached a state where every fresh
+# connection raised `malformed database schema (ix_vecpay_space)` while the
+# already-running process kept serving pages off its cached schema — so the app
+# looked healthy right until it was restarted, and then would not have started
+# at all. Now a damaged database is moved to `quarantine/` and the normal
+# rebuild refills it. See `dbhealth.py`.
+if paths.ADOPTION_NOTE:
+    log(paths.ADOPTION_NOTE, SUB)
+for _note in paths.__dict__.get("_ADOPT_BLOCKED", ()):
+    log(f"could not move the data folder out of AppData — {_note}", SUB, "WARN")
+for _note in dbhealth.boot():
+    log(_note, SUB, "WARN")
 
 
 # ══════════════════════════════════════════════════════════════════════════

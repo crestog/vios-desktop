@@ -82,8 +82,37 @@ def resume_mirror():
 
 @router.post("/api/mirror/prioritize/{video_key}")
 def prioritize_mirror(video_key: str):
-    mirror.prioritize(video_key)
-    return {"ok": True, "key": video_key}
+    """Move one reel to the front of the mirror queue.
+
+    Returns whatever `mirror.prioritize` decided — `state` is one of `ready`,
+    `queued`, `downloading`, `deriving` or `unknown`, with a sentence in `note`
+    fit to show a person. This route used to return `{"ok": True}` no matter
+    what, including for a key the mirror had never heard of, which is why
+    "Download now" could report success and do nothing.
+    """
+    return mirror.prioritize(video_key)
+
+
+@router.get("/api/mirror/backlog")
+def get_mirror_backlog(limit: int = 40):
+    """Which reels are unfinished and why — what "see the queue" should show."""
+    return mirror.backlog(limit=limit)
+
+
+@router.post("/api/mirror/verify")
+def verify_mirror():
+    """Re-measure every local original against the size Telegram declared.
+
+    Exposed as a button because "it says thirty and I do not believe it" needs an
+    answer a person can ask for. Cheap — one `stat` per reel, no network.
+    """
+    return mirror.verify_now()
+
+
+@router.post("/api/mirror/reconnect")
+def reconnect_mirror():
+    """Retire the Telegram session and open a fresh one."""
+    return mirror.reconnect()
 
 
 # ── Local Video Library ───────────────────────────────────────────────────

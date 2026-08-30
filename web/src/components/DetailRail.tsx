@@ -194,8 +194,8 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
                 className="btn"
                 onClick={async () => {
                   try {
-                    await prioritizeMirror(videoKey);
-                    setSaid('moved to the front of the download queue');
+                    const r = await prioritizeMirror(videoKey);
+                    setSaid(r.note || r.state);
                   } catch (e) {
                     setSaid(String((e as Error).message || e));
                   }

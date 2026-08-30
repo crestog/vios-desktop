@@ -34,13 +34,30 @@ import time
 
 import requests
 
+import tgcompat
+
 from . import config
 
 _LOG = []
 _LOG_LOCK = threading.Lock()
 
+# `/api/log` serves this ring buffer straight to the browser, so it needs the
+# same credential redaction the desktop logger applies — and it needs to be the
+# *same* rule, not a second copy that can drift. `logger` imports only `paths`,
+# so this is safe from here even though `atlas` is a package below it.
+try:
+    from logger import redact as _redact
+except Exception:                                      # noqa: BLE001
+    # Atlas also runs on the Kaggle side, where the desktop logger is absent.
+    # A crude but real fallback beats logging the token verbatim.
+    _TOKEN_RE = re.compile(r"/bot(\d{5,}:)?[A-Za-z0-9_-]{20,}")
+
+    def _redact(text: str) -> str:
+        return _TOKEN_RE.sub("/bot[BOT_TOKEN]", text)
+
 
 def log(msg: str, level: str = "INFO") -> None:
+    msg = _redact(str(msg))
     line = f"{time.strftime('%H:%M:%S')} · {level} · {msg}"
     with _LOG_LOCK:
         _LOG.append(line)
@@ -198,13 +215,36 @@ def _raw(client, name: str):
     return lambda *a, **kw: inner(client, *a, **kw)
 
 
+# "The socket died" versus "Telegram said no" — the distinction that decides
+# whether reconnecting can help. It lives in `tgcompat` because this module and
+# `capture/mtproto.py` each own an independent MTProto client and both need the
+# same answer; see `tgcompat.is_transport_error` for the incident behind it.
+_is_transport_error = tgcompat.is_transport_error
+
+
 class _Mtproto:
     """A pyrogram client pinned to a private event loop on a private thread.
 
     Callers are synchronous FastAPI handlers and background workers. Rather
     than dragging an async runtime through the whole program (or reaching for
     nest_asyncio, which makes reentrancy bugs look like hangs), the client owns
-    one loop and every entry point here is `submit(coro, timeout)`.
+    one loop and every entry point here is `submit(make_coro, timeout)`.
+
+    **It rebuilds itself, and that is the point of this class now.** The version
+    this replaced latched `_ready` on the first attempt and thereafter answered
+    `start()` with `self._client is not None` — a check on whether an *object*
+    exists, not on whether its socket does. So the first dropped connection was
+    permanent for the life of the process: measured, one `WinError 10053` at
+    10:53:19 poisoned every download until 11:49 and beyond, with the mirror
+    retrying against a dead socket every five seconds and reporting itself
+    healthy the entire time. A laptop left open overnight hits this every night.
+
+    The recovery is a generation counter rather than a flag. When a call fails
+    with a transport error it asks for the session it used to be retired, naming
+    the generation it saw; if another thread already retired that generation the
+    request is a no-op. Without it, twenty worker threads failing on the same
+    dead socket would each tear down and rebuild — nineteen of them destroying a
+    session a sibling had just finished negotiating.
     """
 
     def __init__(self):
@@ -213,22 +253,68 @@ class _Mtproto:
         self._client = None
         self._ready = threading.Event()
         self._error = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._gen = 0
+        self._builds = 0
+        self._restarts = 0
+        self._last_restart = 0.0
+        self._last_fail = ""
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def available(self) -> bool:
         return bool(config.API_ID and config.API_HASH and config.BOT_TOKEN)
 
+    # A failed rebuild is cheap but not free — it costs a DC handshake attempt —
+    # and the thing that triggers rebuilds is a worker loop that retries every
+    # few seconds. Without a floor, an unplugged network turns into a connect
+    # storm. Twenty seconds is short enough that a wifi drop recovers on the
+    # first retry a user could notice and long enough that fifty stranded reels
+    # cannot compound into fifty handshakes.
+    _REBUILD_COOLDOWN = 20.0
+
     def start(self) -> bool:
-        """Idempotent. Returns False if MTProto cannot be used at all."""
+        """Idempotent. Returns False if MTProto cannot be used *right now*.
+
+        "Right now" is the change. This used to be a permanent verdict: the
+        first answer was cached in `_ready` and every later caller got
+        `self._client is not None`, which asks whether an object was constructed
+        and not whether its connection is alive.
+
+        Two latches had to go, and the second one is subtle enough that fixing
+        only the first would have looked like a fix and not been one.
+
+        The first is the obvious one: a session that dies is never replaced.
+        `recycle()` clears `_ready`, so the next call through here builds a new
+        one.
+
+        The second is a *failed build*. `_run` sets `_ready` in a `finally`, so a
+        connect attempt that raises still marks the class as having an answer —
+        and the old code's `if self._thread is None` guard then saw the dead
+        thread object and never spawned another. So one failed reconnect (a wifi
+        drop, a DNS blip like the `NameResolutionError` this app logged at
+        boot) was as permanent as the original bug. A thread that has finished
+        is not a build in flight, and this now says so.
+        """
         if not self.available():
             self._error = ("MTProto needs TELEGRAM_API_ID and "
                            "TELEGRAM_API_HASH as well as the bot token.")
             return False
         with self._lock:
-            if self._ready.is_set():
-                return self._client is not None
-            if self._thread is None:
+            if self._ready.is_set() and self._client is not None:
+                return True
+            building = self._thread is not None and self._thread.is_alive()
+            if not building:
+                since = time.time() - self._last_restart
+                if self._builds and since < self._REBUILD_COOLDOWN:
+                    # Recently tried and lost. Say so rather than queueing
+                    # another handshake behind the one that just failed.
+                    return False
+                self._thread = None
+                self._loop = None
+                self._client = None
+                self._ready.clear()
+                self._builds += 1
+                self._last_restart = time.time()
                 self._thread = threading.Thread(target=self._run,
                                                 name="atlas-mtproto",
                                                 daemon=True)
@@ -237,6 +323,60 @@ class _Mtproto:
         # on a fresh container, but it must not be unbounded.
         self._ready.wait(timeout=120)
         return self._client is not None
+
+    def recycle(self, generation: int = -1, why: str = "") -> None:
+        """Retire the session so the next `start()` builds a fresh one.
+
+        `generation` is the sequence number the caller was using when its call
+        failed. If it no longer matches, some other thread has already replaced
+        that session and this is a stale request from a sibling that failed on
+        the same dead socket — dropping it is the whole point. Pass -1 to mean
+        "whatever is current", which is what an explicit reconnect wants.
+
+        Tearing down is best-effort by construction. The session being retired is
+        one whose socket is known to be broken, so `client.stop()` is quite
+        likely to raise; the loop is stopped and the thread joined with a
+        deadline either way, and anything still holding the old client will fail
+        its next call and land back here with a generation that has moved on.
+        """
+        with self._lock:
+            if generation >= 0 and generation != self._gen:
+                return
+            client, loop, thread = self._client, self._loop, self._thread
+            self._client = self._loop = self._thread = None
+            self._gen += 1
+            self._restarts += 1
+            # `_last_restart` is deliberately NOT touched here. It records when a
+            # *build* was last attempted, and `start()` uses it as the cooldown
+            # floor — so stamping it on the way out of a teardown would make the
+            # very next `start()` refuse for twenty seconds, which turns
+            # `mtproto_reconnect()` into a function that reliably reports
+            # failure and then quietly works later. The build path owns that
+            # clock.
+            if why:
+                self._last_fail = why[:200]
+                self._error = f"reconnecting after {why[:160]}"
+            self._ready.clear()
+        if client is not None and loop is not None:
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    _raw(client, "stop")(), loop)
+                fut.result(timeout=15)
+            except Exception:
+                pass
+        if loop is not None:
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=15)
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:
+                pass
+        log(f"MTProto session retired — {why[:120] or 'on request'}", "WARN")
 
     def _run(self):
         # `find_spec`, not a real import: the question here is only "is the
@@ -253,8 +393,9 @@ class _Mtproto:
             return
         import tgcompat
 
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
 
         async def _start():
             try:
@@ -283,27 +424,118 @@ class _Mtproto:
                     max_concurrent_transmissions=4)
                 await _raw(client, "start")()
                 self._client = client
-                log("MTProto session ready")
+                self._error = None       # cleared: a successful rebuild must not
+                                         # leave the previous drop's message
+                                         # showing in the status panel forever
+                log("MTProto session ready" if self._builds <= 1 else
+                    f"MTProto session rebuilt (attempt {self._builds})")
             except Exception as exc:
                 self._error = f"{type(exc).__name__}: {str(exc)[:200]}"
                 log(f"MTProto unavailable — {self._error}", "WARN")
             finally:
                 self._ready.set()
 
-        self._loop.run_until_complete(_start())
-        if self._client is not None:
-            self._loop.run_forever()
-
-    def submit(self, coro, timeout: float):
-        """Run a coroutine on the client's loop and wait, with a deadline."""
-        if not self.start():
-            raise RuntimeError(self._error or "MTProto unavailable")
-        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        loop.run_until_complete(_start())
+        established = self._client is not None
+        if established:
+            loop.run_forever()
+        # The loop has stopped: either `recycle()` asked it to, or the session
+        # never started. Nothing else is allowed to submit to it, so make that
+        # true rather than hoping — a stale `_loop` here is a
+        # `run_coroutine_threadsafe` into a loop nobody is running, which hangs
+        # until the caller's timeout instead of failing.
+        #
+        # `_ready` is only cleared when a session actually existed. Clearing it
+        # on a *failed* build would race the `_ready.wait(120)` in `start()`:
+        # `_start`'s `finally` sets it, this line unsets it, and a caller that
+        # had not yet reached its wait sits there for the full two minutes
+        # waiting for an event that has already come and gone.
+        with self._lock:
+            if self._loop is loop:
+                self._loop = None
+                if established:
+                    self._client = None
+                    self._ready.clear()
         try:
-            return fut.result(timeout=timeout)
+            if not loop.is_closed():
+                loop.close()
         except Exception:
-            fut.cancel()
-            raise
+            pass
+
+    def submit(self, make_coro, timeout: float, tries: int = 2):
+        """Run a coroutine on the client's loop and wait, with a deadline.
+
+        **`make_coro` is a factory, not a coroutine, and that is what makes the
+        retry possible.** A coroutine object can only be awaited once, so the
+        previous signature — `submit(_go(), timeout)` — physically could not be
+        retried: by the time the failure was visible the only thing that could
+        be run again had already been consumed. Callers now pass `_go`, and the
+        second attempt builds a fresh coroutine against the fresh client.
+
+        A coroutine is still accepted, for any call site that has not been
+        converted, and gets exactly one attempt. That is not a courtesy so much
+        as a refusal to guess: re-awaiting a spent coroutine raises
+        `RuntimeError: cannot reuse already awaited coroutine`, which would read
+        in the log as a bug in this class rather than as a call site to fix.
+
+        On a transport error the session is retired and the call is tried once
+        more on a new one. On anything else — FloodWait handled upstream, a
+        message that does not exist, a permission refusal — the exception
+        propagates untouched, because reconnecting cannot change the answer and
+        a retry loop that hides real errors is how a scan silently returns half
+        a channel.
+        """
+        reusable = callable(make_coro)
+        if not reusable:
+            tries = 1
+        last = None
+        for attempt in range(max(1, tries)):
+            with self._lock:
+                gen = self._gen
+            if not self.start():
+                raise RuntimeError(self._error or "MTProto unavailable")
+            with self._lock:
+                loop = self._loop
+            if loop is None:
+                # Retired between `start()` and here. Not an error — go round.
+                last = RuntimeError("MTProto session was retired mid-call")
+                continue
+            coro = make_coro() if reusable else make_coro
+            fut = asyncio.run_coroutine_threadsafe(coro, loop)
+            try:
+                return fut.result(timeout=timeout)
+            except Exception as exc:
+                fut.cancel()
+                last = exc
+                if attempt >= max(1, tries) - 1 or not _is_transport_error(exc):
+                    raise
+                self.recycle(gen, f"{type(exc).__name__}: {str(exc)[:120]}")
+        raise last if last is not None else RuntimeError("MTProto unavailable")
+
+    @property
+    def generation(self) -> int:
+        return self._gen
+
+    def health(self) -> dict:
+        """What the status endpoints report, so a dead socket is visible.
+
+        The failure this whole class was rewritten for was invisible for
+        fifty-six minutes because nothing anywhere said "the connection is
+        down" — `/api/mirror/status` said `running: true` and the counts simply
+        stopped moving. A number of restarts and the last transport failure are
+        the two facts that would have made it obvious.
+        """
+        with self._lock:
+            return {
+                "available": self.available(),
+                "connected": self._client is not None and self._ready.is_set(),
+                "generation": self._gen,
+                "builds": self._builds,
+                "restarts": self._restarts,
+                "last_restart": self._last_restart,
+                "last_transport_error": self._last_fail,
+                "error": self._error or "",
+            }
 
     @property
     def client(self):
@@ -327,6 +559,32 @@ def mtproto_ready() -> bool:
 
 def mtproto_error() -> str:
     return _mt.error or ""
+
+
+def mtproto_health() -> dict:
+    """Connection state, restart count and last transport failure.
+
+    Exposed as a module function because every status endpoint in the app reaches
+    this module and none of them should reach into `_mt`. What it is for: the
+    dropped-session failure was invisible for fifty-six minutes because no
+    endpoint anywhere reported the transport at all, so the mirror's frozen
+    counts were the only symptom and they read as slowness.
+    """
+    return _mt.health()
+
+
+def mtproto_reconnect(why: str = "asked to") -> bool:
+    """Throw the session away and build a new one. Returns True if it came back.
+
+    The manual door behind the Admin panel's reconnect button, and the thing a
+    "Download now" click can do when the queue has been failing: recovery is
+    automatic on transport errors, but a session can be *logically* stale in ways
+    no exception announces — a token rotated, a bot removed and re-added — and
+    then the only cure is a fresh session that nobody has to wait eight hours to
+    trigger by accident.
+    """
+    _mt.recycle(-1, why)
+    return _mt.start()
 
 
 async def _with_floodwait(make_coro, tries: int = 4):
@@ -377,15 +635,18 @@ def get_messages(ids: list, timeout: float = 120) -> list:
     dropped — deleted messages and service events leave gaps everywhere."""
     if not ids:
         return []
-    client = None
 
     async def _go():
-        nonlocal client
+        # Read the client *here*, not in the enclosing scope. `submit` may build
+        # a second coroutine from this factory after retiring a dead session, and
+        # a client captured before that retirement is the very object whose
+        # socket just failed.
         client = _mt.client
         return await _with_floodwait(
-            lambda: _raw(client, "get_messages")(config.CHANNEL_ID, ids))
+            lambda: _raw(client, "get_messages")(
+                tgcompat.peer(config.CHANNEL_ID), ids))
 
-    out = _mt.submit(_go(), timeout=timeout)
+    out = _mt.submit(_go, timeout=timeout)
     if out is None:
         return []
     if not isinstance(out, list):
@@ -393,9 +654,26 @@ def get_messages(ids: list, timeout: float = 120) -> list:
     return [m for m in out if m is not None and not getattr(m, "empty", False)]
 
 
+_LAST_DL_ERROR = ""
+
+
+def last_download_error() -> str:
+    """Why the most recent MTProto download failed, or "".
+
+    `download_message` returns a bool because most callers only branch on it,
+    but the mirror has to be able to tell a user *why* a reel is not on disk —
+    and "could not download the original" with no cause attached is precisely
+    the message that made an hour of dead-socket failures look like Telegram
+    losing a video. Read it straight after a False.
+    """
+    return _LAST_DL_ERROR
+
+
 def download_message(message, dest: str, progress=None,
                      timeout: float = 900) -> bool:
     """Download a message's media over MTProto. Handles files of any size."""
+    global _LAST_DL_ERROR
+
     async def _go():
         return await _with_floodwait(
             lambda: _raw(_mt.client, "download_media")(
@@ -403,9 +681,15 @@ def download_message(message, dest: str, progress=None,
                 progress=(lambda c, t: progress(c, t)) if progress else None))
 
     try:
-        got = _mt.submit(_go(), timeout=timeout)
-        return bool(got) and os.path.exists(dest)
+        got = _mt.submit(_go, timeout=timeout)
+        if bool(got) and os.path.exists(dest):
+            _LAST_DL_ERROR = ""
+            return True
+        _LAST_DL_ERROR = ("Telegram returned no file — the message may have "
+                          "been deleted or has no media")
+        return False
     except Exception as exc:
+        _LAST_DL_ERROR = f"{type(exc).__name__}: {str(exc)[:180]}"
         log(f"MTProto download failed: {str(exc)[:160]}", "WARN")
         return False
 
@@ -453,6 +737,12 @@ def stream_chunks(message, first_chunk: int = 0, chunk_limit: int = 0,
 
     if not _mt.start():
         raise RuntimeError(_mt.error or "MTProto unavailable")
+    # Both read once, together, before anything is scheduled. A generator that
+    # re-read `_mt.loop` later could post its pump to a loop built after a
+    # reconnect while its client came from before one.
+    generation, loop, client = _mt.generation, _mt.loop, _mt.client
+    if loop is None or client is None:
+        raise RuntimeError(_mt.error or "MTProto session was retired")
 
     q = _queue.Queue(maxsize=queue_size)
     DONE = object()
@@ -468,7 +758,7 @@ def stream_chunks(message, first_chunk: int = 0, chunk_limit: int = 0,
     async def _pump():
         agen = None
         try:
-            agen = _raw(_mt.client, "stream_media")(
+            agen = _raw(client, "stream_media")(
                 message, offset=first_chunk, limit=chunk_limit)
             async for piece in agen:
                 await _offer(piece)
@@ -487,7 +777,7 @@ def stream_chunks(message, first_chunk: int = 0, chunk_limit: int = 0,
                 except Exception:                      # noqa: BLE001
                     pass
 
-    fut = asyncio.run_coroutine_threadsafe(_pump(), _mt.loop)
+    fut = asyncio.run_coroutine_threadsafe(_pump(), loop)
     try:
         while True:
             try:
@@ -498,11 +788,24 @@ def stream_chunks(message, first_chunk: int = 0, chunk_limit: int = 0,
                 # blocking get would hold this worker thread forever.
                 if fut.done():
                     return
+                # A stall this long on a live socket is indistinguishable from a
+                # dead one from here, and the cost of being wrong is one
+                # reconnect. Retiring the session is what stops a single
+                # half-open TCP connection from making every subsequent seek in
+                # every video hang for ninety seconds.
+                _mt.recycle(generation, f"stream stalled {STREAM_STALL:.0f}s")
                 raise RuntimeError("Telegram stopped sending — no data for "
                                    f"{STREAM_STALL:.0f}s")
             if item is DONE:
                 return
             if isinstance(item, Exception):
+                # Retire before raising, not instead of raising. The player will
+                # re-request this byte range within a second or two; that retry
+                # should meet a new session rather than the one that just died.
+                if _is_transport_error(item):
+                    _mt.recycle(
+                        generation,
+                        f"{type(item).__name__}: {str(item)[:120]}")
                 raise item
             yield item
     finally:

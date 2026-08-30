@@ -299,6 +299,57 @@ def peer(value):
     return text
 
 
+def is_transport_error(exc: BaseException) -> bool:
+    """Is this "the socket died" rather than "Telegram said no"?
+
+    The third pyrogram fact this module has to own, and the one that cost the
+    most. It lives here rather than beside either client because there are two
+    independent MTProto clients in this application — `atlas/tgchannel.py` for
+    reading and playback, `capture/mtproto.py` for the backfill sweep — and both
+    need the same answer to the same question. A predicate copied into both is a
+    predicate that will be improved in one.
+
+    The distinction decides whether reconnecting can possibly help, and getting
+    it wrong is expensive in both directions: treat a real refusal as a dead
+    socket and the app rebuilds the session in a tight loop against a channel it
+    will never be allowed to read; treat a dead socket as a refusal and you get
+    what was measured on 30 August — `OSError: [WinError 10053] An established
+    connection was aborted by the software in your host machine` every five
+    seconds for fifty-six minutes, six reels stranded, and a status endpoint
+    cheerfully reporting `running: true` the whole time.
+
+    `OSError` covers the entire Winsock family (10053 aborted, 10054 reset by
+    peer, 10060 timed out) and Linux's ECONNRESET/EPIPE, because Python maps all
+    of them onto it; `ConnectionError` and `TimeoutError` are subclasses already
+    and are named for the reader, not for the check.
+
+    The name and string tests are for pyrogram's own vocabulary, which raises a
+    plain `ConnectionError("Client is already terminated")` from its session
+    layer with no distinguishable class, and for the auth-key errors that mean
+    the *session file* is finished rather than the socket —
+    `AuthKeyUnregistered` after a token rotation, `SessionRevoked` after a
+    sign-out elsewhere. Those are recoverable in exactly the same way, by
+    building a new session, which is why they belong on this side of the line.
+
+    `asyncio.IncompleteReadError` is the shape a connection takes when the peer
+    closes mid-frame — the most common outcome of a session left idle for hours,
+    which is precisely the eight-hour gap this was reported from.
+    """
+    import asyncio                                          # noqa: PLC0415
+    if isinstance(exc, (OSError, ConnectionError, TimeoutError,
+                        asyncio.IncompleteReadError, asyncio.TimeoutError)):
+        return True
+    if type(exc).__name__ in (
+            "AuthKeyUnregistered", "AuthKeyDuplicated", "AuthKeyInvalid",
+            "SessionRevoked", "SessionExpired", "Unauthorized",
+            "ServerError", "ServiceUnavailable", "InternalServerError"):
+        return True
+    text = str(exc).lower()
+    return any(s in text for s in (
+        "already terminated", "not connected", "connection", "socket",
+        "closed", "reset by peer", "timed out", "broken pipe"))
+
+
 def client(*args, **kwargs):
     """A patched `pyrogram.Client`. **The only way to build one in this repo.**
 

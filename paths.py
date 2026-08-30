@@ -42,10 +42,27 @@ Two rules this module exists to enforce:
      answer to the one measured constraint on this machine: C: is the only drive
      and had 69.8 GB free when this was written.
 
-`%LOCALAPPDATA%\\VIOS` is the default rather than a folder beside the source,
-because the source directory is a git working tree and a 30 GB media mirror
-inside a git working tree is a trap — one `git clean -xdf` and the archive is
-gone. Keeping state out of the tree makes that mistake unreachable.
+**HOME is `%USERPROFILE%\\VIOS-Data`, and it is deliberately somewhere you can
+see.** It used to be `%LOCALAPPDATA%\\VIOS`, which is correct by Windows
+convention and wrong for this application, because the instruction that shaped
+the layout was *"if i ever need to free up space i can simply clear one folder
+where entire data is stored and visible to me in my file manager"* — and
+`AppData\\Local` is a hidden directory. A folder you are meant to be able to
+delete has to be a folder you can find. `VIOS_LOCAL_HOME` still overrides it, so
+moving the archive to another drive is one variable.
+
+Beside the *source* is a different question, and still no: the source directory
+is a git working tree, and a 30 GB media mirror inside a git working tree is one
+`git clean -xdf` away from gone. `%USERPROFILE%` is visible without being
+inside anything that gets cleaned.
+
+Deleting HOME is a supported operation, not a recovery procedure. Everything
+under it is either downloaded from the channel (originals, bundles, shards) or
+computed from those (proxies, posters, sprites, keyframes, the databases,
+the vector matrices), so the whole tree is reconstructible and the app rebuilds
+it unattended on the next launch. `stamp_readme()` writes that sentence into the
+folder itself, because the person deleting it will be looking at Explorer and
+not at this docstring.
 """
 
 from __future__ import annotations
@@ -57,8 +74,18 @@ import shutil
 # ── HOME ──────────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# Where state lived before it needed to be visible. Kept as a constant rather
+# than inlined because two things read it: the one-time adoption below, and the
+# Admin panel, which should be able to say "there is still 900 MB over there"
+# if an adoption was ever blocked.
+LEGACY_HOME = os.path.join(os.environ.get("LOCALAPPDATA") or
+                           os.path.join(_HERE, "_nolocalappdata"), "VIOS")
+
 
 def _default_home() -> str:
+    profile = os.environ.get("USERPROFILE")
+    if profile and os.path.isdir(profile):
+        return os.path.join(profile, "VIOS-Data")
     local = os.environ.get("LOCALAPPDATA")
     if local and os.path.isdir(local):
         return os.path.join(local, "VIOS")
@@ -68,12 +95,73 @@ def _default_home() -> str:
     return os.path.join(os.path.dirname(_HERE), "VIOS-Data")
 
 
-HOME = os.path.abspath(os.environ.get("VIOS_LOCAL_HOME") or _default_home())
+def _has_content(path: str) -> bool:
+    try:
+        return any(os.scandir(path))
+    except OSError:
+        return False
+
+
+def _adopt_legacy(home: str) -> str:
+    """Move a pre-existing hidden home to the visible one. Returns a note.
+
+    One `os.rename` of the whole directory, and no per-file fallback, on purpose.
+    A directory rename on the same volume is atomic: either the archive is at the
+    new address or it is entirely at the old one, and there is no third state to
+    reason about later. Per-file copying is where a half-migrated home comes
+    from, and a half-migrated home is worse than either — the databases and the
+    media they describe would be in different folders, each looking complete.
+
+    If the rename fails — most likely because a running instance holds
+    `atlas.db` open — this returns the legacy path and the caller keeps using it.
+    That is not a degraded mode: it is the address the data is at. The next
+    launch, with nothing holding the files, adopts it.
+    """
+    if os.path.abspath(home) == os.path.abspath(LEGACY_HOME):
+        return ""
+    if not _has_content(LEGACY_HOME):
+        return ""
+    if _has_content(home):
+        # Both exist with content. Adopting would either merge two archives or
+        # clobber one, and neither is a decision this module gets to make
+        # silently. The visible one wins and the legacy one is left untouched.
+        return (f"both {home} and the older {LEGACY_HOME} hold data — using "
+                f"the visible one and leaving the other alone")
+    try:
+        if os.path.isdir(home):
+            os.rmdir(home)                   # empty, from a previous `ensure()`
+        os.makedirs(os.path.dirname(home), exist_ok=True)
+        os.rename(LEGACY_HOME, home)
+        return f"moved the data folder out of hidden AppData to {home}"
+    except OSError as exc:
+        _ADOPT_BLOCKED.append(f"{type(exc).__name__}: {exc}")
+        return ""
+
+
+_ADOPT_BLOCKED: list = []
+_WANTED = os.path.abspath(os.environ.get("VIOS_LOCAL_HOME") or _default_home())
+ADOPTION_NOTE = _adopt_legacy(_WANTED)
+
+# The adoption failed and the data is still at the old address, so that is the
+# address this process uses. Pointing HOME at an empty new folder while 900 MB
+# of originals sit in the old one would read to every consumer as "the archive
+# is gone" and start a full re-download.
+HOME = (LEGACY_HOME if (_ADOPT_BLOCKED and _has_content(LEGACY_HOME))
+        else _WANTED)
 
 # ── The layout ────────────────────────────────────────────────────────────
 DB_PATH      = os.path.join(HOME, "atlas.db")
 JOBS_DB      = os.path.join(HOME, "jobs.db")
 LIBRARY_DB   = os.path.join(HOME, "library.db")
+
+# The mirror's proof-of-download ledger, deliberately its own file rather than a
+# table in `atlas.db`. `atlas.db` is the one database this app is willing to
+# throw away and rebuild (see `dbhealth.py`), and the whole value of the mirror
+# ledger is that it can say "these 30 originals on disk are byte-complete"
+# *without* re-downloading them to find out. Putting that proof inside the
+# disposable database would mean every schema corruption costs a re-download of
+# the entire archive.
+MIRROR_DB    = os.path.join(HOME, "mirror.db")
 VECTOR_PATH  = os.path.join(HOME, "moments.vec")
 VECTOR_META  = os.path.join(HOME, "moments.vec.json")
 
@@ -93,6 +181,14 @@ SCRATCH_DIR   = os.path.join(HOME, "scratch")
 # makes publishing to the channel a later and separate decision.
 SHARD_DIR     = os.path.join(HOME, "shards")
 
+# Where a database goes when it cannot be opened. Not `scratch/`, which anything
+# may delete, and not deletion, which is the one irreversible option: a corrupt
+# `atlas.db` is still the only copy of whatever the last pass computed, and a
+# later sqlite build or a `.recover` pass may read what this one cannot. See
+# `dbhealth.py` — the app moves the file here, starts a fresh one, and rebuilds
+# from Telegram rather than refusing to boot.
+QUARANTINE_DIR = os.path.join(HOME, "quarantine")
+
 MEDIA_DIR    = os.path.join(HOME, "media")
 VIDEO_DIR    = os.path.join(MEDIA_DIR, "video")
 PROXY_DIR    = os.path.join(MEDIA_DIR, "proxy")
@@ -108,8 +204,72 @@ WEB_DIR = os.path.join(_HERE, "web", "dist")
 WEB_SRC = os.path.join(_HERE, "web")
 
 _ALL_DIRS = (HOME, FRAME_VEC_DIR, BUNDLE_DIR, MODEL_DIR, SESSION_DIR, LOG_DIR,
-             SCRATCH_DIR, SHARD_DIR, MEDIA_DIR, VIDEO_DIR, PROXY_DIR,
-             POSTER_DIR, SPRITE_DIR, KEYFRAME_DIR)
+             SCRATCH_DIR, SHARD_DIR, QUARANTINE_DIR, MEDIA_DIR, VIDEO_DIR,
+             PROXY_DIR, POSTER_DIR, SPRITE_DIR, KEYFRAME_DIR)
+
+_README_NAME = "READ ME - deleting this folder is safe.txt"
+
+_README = """\
+This folder is everything VIOS keeps on this computer.
+
+You can delete it.
+
+Not "you can delete it if you are careful" — the application is built so that
+this folder is disposable. Every file in here is one of two things:
+
+  * a copy of something that is still in your Telegram channel
+      media\\video    the original reels
+      bundles        database snapshots the Kaggle side published
+      shards         evidence files, which are also uploaded to the channel
+
+  * something the application computed from those, and can compute again
+      atlas.db       search index, graph, library, roadmap
+      jobs.db        the local processing queue
+      library.db     your watched folders and their hashes
+      moments.vec    the vectors search runs against
+      frames         more vectors
+      media\\proxy    the versions that actually play
+      media\\poster   thumbnails
+      media\\sprite   the images the scrub bar shows
+      media\\frames   extracted keyframes
+      models         downloaded AI model weights
+
+Delete the whole folder, or any single sub-folder, whenever you need the space.
+The next time you open VIOS it will notice what is missing and start fetching
+and rebuilding it, unattended. It will take as long as your connection takes.
+Nothing is lost that was not already in Telegram.
+
+Two exceptions worth knowing:
+
+  session\\   your signed-in Telegram session. Deleting it is harmless but you
+             will be asked for your credentials again.
+  logs\\      text logs. Nothing reads them but you.
+
+If you want this folder somewhere else — another drive, for instance — set the
+environment variable VIOS_LOCAL_HOME to the path you want and restart the app.
+It will use that instead, and you can move the existing folder there yourself.
+
+This file is rewritten by the application every time it starts, so editing it
+will not stick.
+"""
+
+
+def stamp_readme() -> None:
+    """Write the delete-me-freely note into HOME itself.
+
+    The person who needs this sentence is looking at Explorer, wondering what
+    the 30 GB folder called VIOS-Data is and whether removing it breaks
+    anything. A docstring in a source file cannot reach them; a text file next
+    to the folders can. Rewritten on every boot rather than written once,
+    because the folder is meant to be deletable and a note that only exists if
+    it was never deleted is the wrong note.
+    """
+    try:
+        with open(os.path.join(HOME, _README_NAME), "w",
+                  encoding="utf-8") as fh:
+            fh.write(_README)
+    except OSError:
+        pass                       # a missing note never justifies a failed boot
 
 
 def ensure() -> None:
@@ -119,6 +279,7 @@ def ensure() -> None:
 
 
 ensure()
+stamp_readme()
 
 # ── Model weights ─────────────────────────────────────────────────────────
 # Set before transformers or huggingface_hub is imported anywhere, which is why

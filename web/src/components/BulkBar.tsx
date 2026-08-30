@@ -91,7 +91,27 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
       <button
         className="btn"
         disabled={busy !== null}
-        onClick={() => void run('downloading', (k) => prioritizeMirror(k))}
+        onClick={() =>
+          void run(
+            'downloading',
+            (k) => prioritizeMirror(k),
+            // `all 100` was a lie here whenever part of the selection was
+            // already local or was a reel the mirror had never heard of. The
+            // endpoint returns which of those each reel was, so say it.
+            (rs) => {
+              const rows = rs as Array<{ state: string }>;
+              const n = (s: string) => rows.filter((r) => r.state === s).length;
+              const parts = [
+                n('queued') ? `${n('queued')} queued` : '',
+                n('downloading') ? `${n('downloading')} already downloading` : '',
+                n('ready') ? `${n('ready')} already here` : '',
+                n('deriving') ? `${n('deriving')} being prepared` : '',
+                n('unknown') ? `${n('unknown')} not in the channel yet` : '',
+              ].filter(Boolean);
+              return parts.length ? parts.join(' · ') : `all ${rows.length}`;
+            }
+          )
+        }
         title="pull these down from the channel before the rest"
       >
         {busy === 'downloading' ? 'queueing…' : 'Download first'}

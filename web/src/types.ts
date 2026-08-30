@@ -570,8 +570,29 @@ export interface MirrorStatus {
   below_floor: boolean;
   total_videos: number;
   downloaded: number;
+  /**
+   * Of the originals on this disk, how many have been measured against the byte
+   * count Telegram declared for them. `downloaded` counts files that exist;
+   * `verified` counts files that are provably whole. They differed by six on the
+   * archive that prompted the split, and the screen was showing the larger one.
+   */
+  verified: number;
+  /** Present, but with no declared size on record to check them against. */
+  unverified: number;
+  /** In the channel and not yet on this disk. */
+  missing: number;
+  /** Reels currently serving a retry backoff after a failed download. */
+  failing: number;
   derived: number;
+  percent: number;
+  /** True once every reel in the channel is local and derived. */
+  complete: boolean;
+  complete_at: number;
   bytes_downloaded: number;
+  cycles: number;
+  last_cycle_at: number;
+  /** One sentence about where the mirror is, fit to show. */
+  note: string;
   active_downloads: Array<{
     key: string;
     msg_id?: number;
@@ -582,8 +603,25 @@ export interface MirrorStatus {
   }>;
   active_derives: Array<{ key: string; started_at: number }>;
   priority_queued: number;
+  queue?: string[];
   recent_errors?: Array<{ key: string; error: string; at: number }>;
   last_error?: string | null;
+  /**
+   * The Telegram session's own health. A mirror with a dead socket used to look
+   * exactly like a mirror with nothing to do — `running: true` and counters that
+   * had stopped moving — so this is reported alongside them.
+   */
+  transport?: {
+    available: boolean;
+    connected: boolean;
+    generation?: number;
+    builds?: number;
+    restarts?: number;
+    last_restart?: number;
+    last_transport_error?: string;
+    error?: string;
+  };
+  telegram_ready?: boolean;
   disk: DiskUsage;
 }
 

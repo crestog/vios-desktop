@@ -1,6 +1,8 @@
-# Application state lives in %LOCALAPPDATA%\VIOS (see paths.py), never here.
-# These entries are the belt to that braces: if VIOS_LOCAL_HOME is ever pointed
-# at the working tree by mistake, a 30 GB media mirror must not become stageable.
+# Application state lives in %USERPROFILE%\VIOS-Data (see paths.py), never here.
+# One visible folder, deletable from the file manager, rebuildable from the
+# channel. These entries are the belt to that braces: if VIOS_LOCAL_HOME is ever
+# pointed at the working tree by mistake, a 30 GB media mirror must not become
+# stageable.
 VIOS-Data/
 vios_home/
 media/video/

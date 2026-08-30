@@ -320,12 +320,28 @@ export default function HomeView(_props: ViewProps) {
                     {fmtCount(mirror.downloaded)} of {fmtCount(mirror.total_videos)} ·{' '}
                     {fmtCount(mirror.derived)} derived · {fmtBytes(mirror.bytes_downloaded)} pulled
                   </div>
+                  {/* `verified` is stated separately from `downloaded` because
+                      the two disagreed by six reels and the screen was showing
+                      the larger number. A file that exists is not a file that
+                      is whole. */}
                   <div className="tile-sub">
-                    {mirror.running
-                      ? mirror.paused
-                        ? 'paused'
-                        : `${mirror.active_downloads.length} downloading`
-                      : 'not running'}
+                    {fmtCount(mirror.verified)} byte-verified
+                    {mirror.unverified > 0 ? ` · ${fmtCount(mirror.unverified)} unproven` : ''}
+                    {mirror.missing > 0 ? ` · ${fmtCount(mirror.missing)} still to fetch` : ''}
+                    {mirror.failing > 0 ? ` · ${fmtCount(mirror.failing)} retrying` : ''}
+                  </div>
+                  <div className="tile-sub">
+                    {mirror.transport &&
+                    mirror.transport.available &&
+                    !mirror.transport.connected
+                      ? 'Telegram is disconnected'
+                      : mirror.complete
+                        ? 'the whole channel is here'
+                        : mirror.running
+                          ? mirror.paused
+                            ? 'paused'
+                            : `${mirror.active_downloads.length} downloading`
+                          : 'not running'}
                     {mirror.below_floor ? ' · disk floor reached' : ''} ·{' '}
                     {fmtBytes(mirror.disk?.free_bytes)} free
                   </div>

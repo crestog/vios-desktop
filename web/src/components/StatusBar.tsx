@@ -91,15 +91,37 @@ export default function StatusBar() {
             className="sb-seg"
             href={href('admin')}
             title={
-              mirror.running
-                ? `mirroring: ${mirror.active_downloads.length} downloading, ${mirror.active_derives.length} deriving`
-                : mirror.paused
-                  ? 'the mirror is paused'
-                  : 'the mirror is idle'
+              // A dead Telegram socket outranks everything else this segment
+              // could say. The failure it exists for looked like an idle mirror:
+              // `running: true`, no active downloads, counters frozen for an
+              // hour because every call was failing against a closed connection.
+              mirror.transport && mirror.transport.available && !mirror.transport.connected
+                ? `Telegram is disconnected — ${
+                    mirror.transport.last_transport_error ||
+                    mirror.transport.error ||
+                    'the session dropped'
+                  }`
+                : mirror.running
+                  ? mirror.paused
+                    ? 'the mirror is paused'
+                    : mirror.note ||
+                      `mirroring: ${mirror.active_downloads.length} downloading, ${mirror.active_derives.length} deriving`
+                  : mirror.paused
+                    ? 'the mirror is paused'
+                    : 'the mirror is idle'
             }
           >
-            mirror {mirror.running ? '◐' : mirror.paused ? '❙❙' : '○'} {fmtCount(mirror.downloaded)}/
-            {fmtCount(mirror.total_videos)}
+            mirror{' '}
+            {mirror.transport && mirror.transport.available && !mirror.transport.connected
+              ? '⚠'
+              : mirror.complete
+                ? '✓'
+                : mirror.running
+                  ? '◐'
+                  : mirror.paused
+                    ? '❙❙'
+                    : '○'}{' '}
+            {fmtCount(mirror.downloaded)}/{fmtCount(mirror.total_videos)}
             {mirror.total_videos > 0 && (
               <span className="sb-dim"> {fmtPct(mirror.downloaded, mirror.total_videos)}</span>
             )}

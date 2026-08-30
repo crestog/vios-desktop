@@ -393,8 +393,8 @@ export default function WatchView({ route }: ViewProps) {
                   className="btn"
                   onClick={async () => {
                     try {
-                      await prioritizeMirror(key);
-                      setSaid('moved to the front of the download queue');
+                      const r = await prioritizeMirror(key);
+                      setSaid(r.note || r.state);
                     } catch (e) {
                       setSaid(String((e as Error).message || e));
                     }

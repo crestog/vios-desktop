@@ -478,9 +478,64 @@ export const pauseMirror = () =>
 export const resumeMirror = () =>
   request<{ ok: boolean; status: MirrorStatus }>('/mirror/resume', { method: 'POST' });
 
-/** Jump one video to the front of the mirror queue — "I want to watch this now". */
+/**
+ * Jump one video to the front of the mirror queue — "I want to watch this now".
+ *
+ * `state` is the mirror's real verdict: `queued` (it is now next in line),
+ * `downloading` / `deriving` (already in flight), `ready` (nothing to do, the
+ * file is complete on this disk) or `unknown` (the mirror has never heard of
+ * this reel — it is in neither the search index nor the channel's upload
+ * ledger). `note` is a sentence fit to show. Callers must show it rather than
+ * assuming success: this endpoint used to answer `{ ok: true }` unconditionally,
+ * so "Download now" reported that it had queued reels it had silently dropped.
+ */
+export type PrioritizeResult = {
+  ok: boolean;
+  key: string;
+  state: 'queued' | 'downloading' | 'deriving' | 'ready' | 'unknown' | 'invalid';
+  note: string;
+  position?: number;
+  queue_depth?: number;
+  percent?: number;
+};
+
 export const prioritizeMirror = (key: string) =>
-  request<{ ok: boolean; key: string }>(`/mirror/prioritize/${encodeURIComponent(key)}`, {
+  request<PrioritizeResult>(`/mirror/prioritize/${encodeURIComponent(key)}`, {
+    method: 'POST',
+  });
+
+/** Which reels the mirror has not finished, and why. */
+export const getMirrorBacklog = (signal?: AbortSignal) =>
+  request<{
+    ok: boolean;
+    waiting: number;
+    items: {
+      key: string;
+      msg_id: number | null;
+      expected_bytes: number;
+      have_original: boolean;
+      why: string;
+      attempts: number;
+      last_error: string;
+      indexed: boolean;
+    }[];
+  }>('/mirror/backlog', {}, signal);
+
+/** Re-measure every local original against the byte count Telegram declared. */
+export const verifyMirror = () =>
+  request<{
+    ok: boolean;
+    total: number;
+    verified: number;
+    unverified: number;
+    incomplete: number;
+    missing: number;
+    note: string;
+  }>('/mirror/verify', { method: 'POST' });
+
+/** Retire the Telegram session and open a fresh one. */
+export const reconnectMirror = () =>
+  request<{ ok: boolean; transport: Record<string, unknown> }>('/mirror/reconnect', {
     method: 'POST',
   });
 

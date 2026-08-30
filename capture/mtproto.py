@@ -49,10 +49,43 @@ class Channel:
         self.ready = False
         self.reason = ""
         self.last_error = ""
+        self.restarts = 0
         self._loop = None
         self._thread = None
         self._app = None
         self._lock = threading.RLock()
+        self._last_build = 0.0
+
+    # A failed rebuild costs a DC handshake, and what triggers rebuilds is a
+    # sweep that retries every few seconds. Without a floor an unplugged network
+    # becomes a connect storm. Matches `atlas/tgchannel.py`.
+    _REBUILD_COOLDOWN = 20.0
+
+    def recycle(self, why: str = "") -> bool:
+        """Throw this session away and open a new one. Returns the new readiness.
+
+        The reason this exists is the same defect its sibling in
+        `atlas/tgchannel.py` had, measured on the same afternoon: a session that
+        dies stays dead for the life of the process. `start()` returns early on
+        `self.ready`, `self.ready` is only ever set when a client is built, and
+        nothing ever unset it — so one `WinError 10053` on an idle socket meant
+        every later `messages()` call in the sweep failed against a client whose
+        connection had been closed hours ago, while `ready` reported True.
+
+        The cooldown is checked here rather than in `start()` because `start()`
+        is also the first-boot path and a first boot must not wait.
+        """
+        with self._lock:
+            since = time.time() - self._last_build
+            if self.restarts and since < self._REBUILD_COOLDOWN:
+                return False
+            self.restarts += 1
+            self._last_build = time.time()
+            if why:
+                self.last_error = why[:180]
+            self.log(f"MTProto session retired — {why[:120] or 'on request'}")
+            self.stop()
+            return self.start()
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> bool:
@@ -111,9 +144,11 @@ class Channel:
                 self._app = self._submit(_boot(), timeout=180)
                 self.ready = True
                 self.reason = ""
+                self._last_build = time.time()
                 self.log("MTProto session open")
             except Exception as exc:
                 self.reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+                self._last_build = time.time()
                 self._shutdown_loop()
             return self.ready
 
@@ -193,7 +228,22 @@ class Channel:
             # cause attached is what made this class of failure unreadable.
             self.last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
             self.log(f"message fetch failed: {self.last_error}")
-            return {}
+            # One reconnect, then one retry. A dead socket and a refusal look
+            # identical from here and only one of them is worth reconnecting
+            # for, which is what `tgcompat.is_transport_error` decides. Without
+            # this the whole sweep runs to completion against a closed
+            # connection and reports every reel as missing from Telegram.
+            import tgcompat  # noqa: PLC0415
+            if not tgcompat.is_transport_error(exc) or not self.recycle(
+                    self.last_error):
+                return {}
+            try:
+                msgs = self._submit(_go(), timeout=timeout)
+            except Exception as exc2:
+                self.last_error = f"{type(exc2).__name__}: {str(exc2)[:160]}"
+                self.log(f"message fetch failed after reconnect: "
+                         f"{self.last_error}")
+                return {}
         return {int(m.id): m for m in msgs
                 if m is not None and not getattr(m, "empty", False)}
 
@@ -222,6 +272,21 @@ class Channel:
             self.last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
             self.log(f"download failed: {self.last_error}")
             got = None
+            # A dropped connection mid-download is the normal way a large reel
+            # fails, and the message object handed in here stays valid across a
+            # reconnect — it is a description of a file, not a handle on a
+            # socket. So one reconnect and one retry, from the start of the file.
+            import tgcompat  # noqa: PLC0415
+            if tgcompat.is_transport_error(exc) and self.recycle(
+                    self.last_error):
+                try:
+                    got = self._submit(_go(), timeout=timeout)
+                except Exception as exc2:
+                    self.last_error = (f"{type(exc2).__name__}: "
+                                       f"{str(exc2)[:160]}")
+                    self.log(f"download failed after reconnect: "
+                             f"{self.last_error}")
+                    got = None
         if not got or not os.path.exists(got):
             for stray in (tmp, dest + ".part"):
                 if os.path.exists(stray):
