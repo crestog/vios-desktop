@@ -65,6 +65,30 @@ KEYFRAME_DIR = paths.KEYFRAME_DIR
 
 WEB_DIR = paths.WEB_DIR           # web/dist — the built frontend
 
+# ── What identity reads ───────────────────────────────────────────────────
+# The two inputs `atlas.identity` needs beyond the `video` table itself, named
+# the way it asks for them. It owns neither: both are read-only, and both are
+# optional — a machine with no ledger and no media still settles identity from
+# what the `video` rows say, just with fewer aliases resolved.
+#
+#   MEDIA_DIR    the folder holding `video/`, hashed to catch the case no
+#                string can: two byte-identical files under two different
+#                names. This is `CACHE_DIR` again under identity's own name.
+#                A third alias for one directory is worth it here, because
+#                `identity` is shared verbatim with the Kaggle repository and
+#                a rename would be a fork in the one file that must not fork.
+#   LEDGER_PATH  the capture plane's ledger, and the *only* place that records
+#                "message 38 is the reel DZDNyKgv70R". `capture.engine`
+#                computes the same path from `config.BASE_DIR`, which is
+#                `paths.HOME`; spelled out rather than imported so reading
+#                atlas does not require reading the capture plane.
+#
+# Upstream both are `os.environ.get(...) or <default>`, because Kaggle keeps
+# this data in three directories with different lifetimes. Here paths.py owns
+# the layout, so they are plain views onto it — one disk, one answer.
+MEDIA_DIR   = paths.MEDIA_DIR
+LEDGER_PATH = os.path.join(paths.HOME, "capture_ledger.db")
+
 # paths.ensure() ran at its import, so every directory above exists.
 
 # ── Telegram ──────────────────────────────────────────────────────────────
