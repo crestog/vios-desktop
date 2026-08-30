@@ -62,6 +62,9 @@ export function tierFor(density: number): 160 | 360 | 720 {
 
 const HOVER_DELAY_MS = 200;
 
+/** Shelf chips shown before the row rolls up into `+n`. Two fits every density. */
+const SHELF_MAX = 2;
+
 export default function Card({
   video,
   density = 5,
@@ -91,6 +94,19 @@ export default function Card({
   const matchedT = video.best?.t_start ?? null;
   const channels = channelsIn(video.moments || (video.best ? [video.best] : undefined));
   const moments = video.moments || (video.best ? [video.best] : []);
+
+  // Identity, in the two places it fits without a fourth footer row: the
+  // shelves this reel is filed on share the chip row with the channels, and
+  // "it arrived more than once" joins the metadata line. The footer is exactly
+  // 70 px and `VirtualGrid.FOOT_H` agrees, so neither may add height.
+  //
+  // Both are plain spans. The card is an `<a>`, interactive content inside an
+  // anchor is invalid, and a nested button would cost the middle-click and
+  // copy-link behaviour this element exists for. Clicking a shelf to filter by
+  // it belongs to the facet rail, where every other filter already lives.
+  const shelves = video.collections || [];
+  const uploads = (video.messages || []).length;
+  const twin = (video.twin_of || []).length > 0;
 
   const clearTimer = () => {
     if (timer.current !== null) {
@@ -215,9 +231,31 @@ export default function Card({
                 {plural(video.moment_count, 'claim', 'claims', fmtCompact)}
               </span>
             )}
+            {(twin || uploads > 1) && (
+              <span
+                className="card-twin"
+                title={
+                  twin
+                    ? 'the same footage as another video in the archive'
+                    : `one reel, ${uploads} channel messages — a re-upload, not a duplicate`
+                }
+              >
+                ⧉ {twin ? 'twin' : uploads}
+              </span>
+            )}
           </div>
-          {channels.length > 0 && (
+          {(shelves.length > 0 || channels.length > 0) && (
             <div className="card-chips">
+              {shelves.slice(0, SHELF_MAX).map((c) => (
+                <span key={`shelf:${c}`} className="card-shelf" title={`saved in ${c}`}>
+                  {c}
+                </span>
+              ))}
+              {shelves.length > SHELF_MAX && (
+                <span className="card-shelf" title={shelves.join(', ')}>
+                  +{shelves.length - SHELF_MAX}
+                </span>
+              )}
               {channels.map((c) => (
                 <span key={c} className={chipClass(c)}>
                   {c}

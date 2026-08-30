@@ -3153,6 +3153,15 @@ tr:has(.js-deferred) .ej-reason { color: var(--text-secondary); }
   font-family: var(--font-mono);
 }
 .card-moments { color: var(--text-disabled); }
+/* One reel that arrived twice, or one reel that is the same footage as another.
+   Monospace and recessive because it is a fact about the archive rather than
+   about the video — but present on the card, because "why is this here twice"
+   is exactly the question a grid of thirty reels used to raise sixty times. */
+.card-twin {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
+}
 /* One row of channel chips, clipped rather than wrapped — wrapping would push
    the footer past 70 px and break the grid's row arithmetic. */
 .card-chips {
@@ -3166,6 +3175,28 @@ tr:has(.js-deferred) .ej-reason { color: var(--text-secondary); }
   padding: 0 4px;
   font-size: 8.5px;
   line-height: 15px;
+}
+/* A collection this reel is filed under, sharing that same row rather than
+   taking a fourth one the footer has no pixels for. Grey by rule: the nine chip
+   colours mean "this evidence came from that observer", and where the *person*
+   filed something is a different kind of statement, so it must not wear an
+   observer's hue. Elided rather than wrapped, for the same arithmetic. */
+.card-shelf {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  max-width: 84px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 15px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .vios-card.is-selected {
   border-color: var(--accent-primary);
@@ -3986,6 +4017,27 @@ a.stat:hover {
 .kv-link { color: var(--accent-primary); text-decoration: none; }
 .kv-link:hover { text-decoration: underline; }
 
+/* A `dd` holding several short pills instead of one value — the shelves a reel
+   is filed on, or the reels that are the same footage. Wraps, because unlike the
+   card footer the rail has vertical room and eliding a shelf name here would
+   hide the answer the row exists to give. */
+.kv-shelves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.kv-shelves .card-shelf {
+  max-width: none;
+  font-size: 10px;
+  line-height: 17px;
+  text-decoration: none;
+}
+.kv-shelves a.card-shelf:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+
 /* ── The detail rail: one reel's facts, beside the grid ── */
 .rail-poster {
   position: relative;
@@ -4121,6 +4173,26 @@ a.stat:hover {
 }
 .bulk-said { font-size: 11px; color: var(--state-success); }
 .bulk-note { font-size: 10.5px; color: var(--text-disabled); font-style: italic; }
+/* The shelf name and the button that files it read as one control, so they sit
+   flush with a single seam rather than as two items in the bar's 7 px rhythm. */
+.bulk-file {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 0 0 auto;
+}
+.bulk-file .input-text {
+  width: 132px;
+  font-size: 11.5px;
+  padding: 5px 8px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.bulk-file .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
 
 /* ══ WATCH — the player, and the two tracks under it ══
 

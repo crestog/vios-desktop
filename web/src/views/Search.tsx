@@ -60,6 +60,7 @@ export default function SearchView({ route }: ViewProps) {
   const sort = p.get('sort') || 'relevance';
   const creator = p.get('creator') || '';
   const category = p.get('category') || '';
+  const collection = p.get('collection') || '';
   const source = p.get('source') || '';
   const lane = p.get('lane') === 'frames' ? 'frames' : 'text';
   const minDur = num(p, 'min_dur');
@@ -79,14 +80,25 @@ export default function SearchView({ route }: ViewProps) {
   useEffect(() => {
     if (typed === urlQ) return;
     go('search', {
-      params: { q: typed, sort, creator, category, source, lane: lane === 'frames' ? 'frames' : '' },
+      params: {
+        q: typed,
+        sort,
+        creator,
+        category,
+        collection,
+        source,
+        lane: lane === 'frames' ? 'frames' : '',
+      },
       replace: true,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typed]);
 
   const [pages, setPages] = useState(1);
-  useEffect(() => setPages(1), [urlQ, sort, creator, category, source, minDur, maxDur, minHits]);
+  useEffect(
+    () => setPages(1),
+    [urlQ, sort, creator, category, collection, source, minDur, maxDur, minHits]
+  );
   const limit = PAGE * pages;
 
   const enabled = urlQ.trim().length > 0;
@@ -100,6 +112,7 @@ export default function SearchView({ route }: ViewProps) {
           sort,
           creator,
           category,
+          collection,
           source,
           min_dur: minDur,
           max_dur: maxDur,
@@ -107,7 +120,7 @@ export default function SearchView({ route }: ViewProps) {
         },
         signal
       ),
-    [urlQ, limit, sort, creator, category, source, minDur, maxDur, minHits],
+    [urlQ, limit, sort, creator, category, collection, source, minDur, maxDur, minHits],
     { enabled: enabled && lane === 'text' }
   );
 
@@ -133,6 +146,7 @@ export default function SearchView({ route }: ViewProps) {
         sort,
         creator,
         category,
+        collection,
         source,
         min_dur: minDur,
         max_dur: maxDur,
@@ -242,8 +256,9 @@ export default function SearchView({ route }: ViewProps) {
           <FacetRail
             creators={res?.facets?.creators}
             categories={res?.facets?.categories}
+            collections={res?.facets?.collections}
             channels={channels}
-            active={{ creator, category, source }}
+            active={{ creator, category, source, collection }}
             minDur={minDur}
             maxDur={maxDur}
             minHits={minHits}
@@ -286,7 +301,7 @@ export default function SearchView({ route }: ViewProps) {
               emptyHead="Nothing matched"
               emptyNote={
                 res?.note ??
-                (creator || category || source || minDur || maxDur || minHits
+                (creator || category || collection || source || minDur || maxDur || minHits
                   ? 'The query may have matched rows the filters then removed — try clearing one.'
                   : 'No spoken line, caption, on-screen text or model description in the archive contains that.')
               }

@@ -2,32 +2,43 @@
  * components/BulkBar.tsx — what you can do to a selection, and only that.
  *
  * The design doc lists "add to collection / requeue / export / open as
- * playlist". Two of those four have no endpoint behind them: there is no
- * `collection` table and no playback queue. A button that looks real and does
- * nothing is worse than an absent one — it teaches you the app is broken — so
- * this bar offers the three the server can actually perform, and says plainly
- * that collections are not built yet rather than leaving a dead control.
+ * playlist". Three of the four have an endpoint behind them now; there is still
+ * no playback queue, so there is still no playlist button. A button that looks
+ * real and does nothing is worse than an absent one — it teaches you the app is
+ * broken — so this bar offers exactly what the server can perform.
+ *
+ * Filing is additive and the label says so, because that is the server's
+ * contract rather than this bar's shortcut: `set_collections` never removes a
+ * membership, so "File under" adds a shelf and leaves the others alone. A reel
+ * already on two shelves ends up on three, which is the entire point of
+ * collections being a membership table instead of a column.
  *
  * `enqueueVideo` is called once per key rather than as one batch call, because
  * `/api/engine/enqueue` takes a single `video_key`. Sequential, not
  * `Promise.all`: a hundred parallel POSTs against a single-writer sqlite is how
- * you get "database is locked" for no gain on a local socket.
+ * you get "database is locked" for no gain on a local socket. Filing is the
+ * opposite shape — one statement about a set — so it is one call.
  */
 
 import { useState } from 'react';
-import { Copy, Network, X, Zap } from 'lucide-react';
-import { enqueueVideo, prioritizeMirror } from '../lib/api';
+import { Copy, FolderPlus, Network, X, Zap } from 'lucide-react';
+import { addToCollection, enqueueVideo, prioritizeMirror } from '../lib/api';
 import { go } from '../lib/router';
 import { fmtCount, plural } from '../lib/format';
 
 export interface BulkBarProps {
   keys: string[];
+  /** Existing shelf names, for the suggestion list. The caller already has them. */
+  collections?: string[];
+  /** Called after a successful filing, so the grid can show the new chip. */
+  onFiled?: () => void;
   onClear: () => void;
 }
 
-export default function BulkBar({ keys, onClear }: BulkBarProps) {
+export default function BulkBar({ keys, collections, onFiled, onClear }: BulkBarProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
+  const [shelf, setShelf] = useState('');
 
   const run = async (
     label: string,
@@ -60,6 +71,37 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
           ? `${label}: ${tally(done)}`
           : `${label}: all ${ok}`
     );
+  };
+
+  const file = async () => {
+    const name = shelf.trim();
+    if (!name) return;
+    setBusy('filed');
+    setSaid(null);
+    try {
+      const r = await addToCollection(name, keys);
+      const skipped = r.unknown?.length
+        ? ` · ${plural(r.unknown.length, 'key')} the archive does not know`
+        : '';
+      // `added` counts new memberships and `videos` counts reels asked about, so
+      // the two differ when part of the selection was already on that shelf.
+      // Saying which is the difference between a report and a shrug.
+      setSaid(
+        r.added
+          ? `filed ${plural(r.added, 'reel')} under "${r.collection}"` +
+            (r.added < r.videos ? ` · ${r.videos - r.added} already there` : '') +
+            skipped
+          : // "all 1 reel were" is what `plural` plus a hard-coded verb produces,
+            // and one reel is the commonest selection there is.
+            `${r.videos === 1 ? 'that reel is' : `all ${plural(r.videos, 'reel')} are`}` +
+            ` already under "${r.collection}"${skipped}`
+      );
+      setShelf('');
+      onFiled?.();
+    } catch (e) {
+      setSaid(`filing failed — ${String((e as Error).message || e)}`);
+    }
+    setBusy(null);
   };
 
   return (
@@ -125,6 +167,38 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
         <Network size={12} /> In the graph
       </button>
 
+      {/* An input rather than a menu of existing shelves, because a new shelf is
+          as ordinary an action as reusing one — the suggestion list offers what
+          exists without making it the only option. Enter files, so the whole
+          gesture is select, type, Enter. */}
+      <span className="bulk-file">
+        <input
+          className="input-text"
+          list="bulk-shelves"
+          value={shelf}
+          placeholder="collection…"
+          disabled={busy !== null}
+          onChange={(e) => setShelf(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void file();
+          }}
+          aria-label="collection to file the selection under"
+        />
+        <datalist id="bulk-shelves">
+          {(collections || []).map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+        <button
+          className="btn"
+          disabled={busy !== null || !shelf.trim()}
+          onClick={() => void file()}
+          title="add these reels to that collection — it never removes the ones they are already in"
+        >
+          <FolderPlus size={12} /> {busy === 'filed' ? 'filing…' : 'File under'}
+        </button>
+      </span>
+
       <button
         className="btn-ghost"
         onClick={() => {
@@ -137,8 +211,11 @@ export default function BulkBar({ keys, onClear }: BulkBarProps) {
 
       <span className="spacer" />
       {said && <span className="bulk-said">{said}</span>}
-      <span className="bulk-note" title="there is no collection table in the database yet">
-        collections aren't built yet
+      <span
+        className="bulk-note"
+        title="a playlist needs a playback queue, and there is no endpoint for one yet"
+      >
+        no playlist yet
       </span>
       <button className="btn-ghost" onClick={onClear} title="clear the selection">
         <X size={12} />

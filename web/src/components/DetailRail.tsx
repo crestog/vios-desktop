@@ -52,6 +52,13 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
     }, {})
   );
   const where = v.data?.playback?.where;
+  // Identity, as facts rather than as a warning. The rail is the first place
+  // with room to say *why* one reel can look like several: it sits on the
+  // shelves the person filed it on, and it may have been uploaded to the channel
+  // more than once. `/api/video` decodes all three, so these are lists already.
+  const shelves: string[] = meta?.collections || [];
+  const messages: number[] = meta?.messages || [];
+  const twins: string[] = meta?.twin_of || [];
 
   return (
     <aside className="rail rail-right" aria-label="Reel details">
@@ -130,8 +137,56 @@ export default function DetailRail({ videoKey, q, onClose, hint }: DetailRailPro
                 <dd title={fmtDate(meta.created_at)}>{fmtAgo(meta.created_at)}</dd>
               </>
             )}
+            {shelves.length > 0 && (
+              <>
+                <dt>saved in</dt>
+                <dd className="kv-shelves">
+                  {shelves.map((c) => (
+                    <a
+                      key={c}
+                      className="card-shelf"
+                      href={href('library', { params: { collection: c } })}
+                      title={`everything saved in ${c}`}
+                    >
+                      {c}
+                    </a>
+                  ))}
+                </dd>
+              </>
+            )}
             <dt>claims</dt>
             <dd>{fmtCompact(moments.length || meta?.moment_count || 0)}</dd>
+            {messages.length > 1 && (
+              <>
+                <dt>arrived</dt>
+                <dd
+                  title={
+                    'One reel, uploaded to the channel more than once. The archive ' +
+                    'keeps a single video and remembers every message that carried ' +
+                    'it, so a re-upload is never a second copy.'
+                  }
+                >
+                  {plural(messages.length, 'time')} · msg {messages.join(', ')}
+                </dd>
+              </>
+            )}
+            {twins.length > 0 && (
+              <>
+                <dt>same footage as</dt>
+                <dd className="kv-shelves">
+                  {twins.map((k) => (
+                    <a
+                      key={k}
+                      className="kv-link"
+                      href={href('watch', { key: k, params: { q } })}
+                      title="byte-identical to this reel — kept as its own row, linked rather than merged"
+                    >
+                      {k}
+                    </a>
+                  ))}
+                </dd>
+              </>
+            )}
             {where && (
               <>
                 <dt>file</dt>

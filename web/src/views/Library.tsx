@@ -65,6 +65,7 @@ export default function LibraryView({ route }: ViewProps) {
   const sort = p.get('sort') || 'recent';
   const creator = p.get('creator') || '';
   const category = p.get('category') || '';
+  const collection = p.get('collection') || '';
   const has = p.get('has') || '';
 
   const density = useDensity();
@@ -76,17 +77,20 @@ export default function LibraryView({ route }: ViewProps) {
 
   useEffect(() => {
     if (typed === urlQ) return;
-    go('library', { params: { q: typed, sort, creator, category, has }, replace: true });
+    go('library', {
+      params: { q: typed, sort, creator, category, collection, has },
+      replace: true,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typed]);
 
   const [pages, setPages] = useState(1);
-  useEffect(() => setPages(1), [urlQ, sort, creator, category, has]);
+  useEffect(() => setPages(1), [urlQ, sort, creator, category, collection, has]);
   const limit = PAGE * pages;
 
   const lib = useFetch(
-    (signal) => getLibrary({ q: urlQ, limit, sort, creator, category, has }, signal),
-    [urlQ, limit, sort, creator, category, has]
+    (signal) => getLibrary({ q: urlQ, limit, sort, creator, category, collection, has }, signal),
+    [urlQ, limit, sort, creator, category, collection, has]
   );
 
   const facets = useFetch(getFacets, []);
@@ -100,7 +104,7 @@ export default function LibraryView({ route }: ViewProps) {
   useEffect(() => {
     setSelected(new Set());
     setFocus(null);
-  }, [urlQ, sort, creator, category, has]);
+  }, [urlQ, sort, creator, category, collection, has]);
 
   const onSelectToggle = useCallback((key: string) => {
     setSelected((prev) => {
@@ -116,7 +120,9 @@ export default function LibraryView({ route }: ViewProps) {
   const items = res?.results || [];
 
   const set = (patch: Record<string, unknown>) =>
-    go('library', { params: { q: urlQ, sort, creator, category, has, ...patch } });
+    go('library', {
+      params: { q: urlQ, sort, creator, category, collection, has, ...patch },
+    });
 
   const total = res?.total;
   const archiveTotal = facets.data?.totals?.videos;
@@ -209,9 +215,10 @@ export default function LibraryView({ route }: ViewProps) {
       <div className="split">
         <FacetRail
           creators={facets.data?.creators}
+          collections={facets.data?.collections}
           categories={facets.data?.categories}
           channels={channels}
-          active={{ creator, category, source: '' }}
+          active={{ creator, category, source: '', collection }}
           onChange={(patch) => {
             // The library has no `source` filter server-side — a channel is a
             // property of the claims, not the reel. Send the channel to Search,
@@ -251,7 +258,18 @@ export default function LibraryView({ route }: ViewProps) {
           />
 
           {selected.size > 0 && (
-            <BulkBar keys={[...selected]} onClear={() => setSelected(new Set())} />
+            <BulkBar
+              keys={[...selected]}
+              collections={(facets.data?.collections || []).map((f) => f.value)}
+              onFiled={() => {
+                // Both, and in this order: the facet list gains the new shelf and
+                // its count, and the rows gain the chip. Reloading only the rows
+                // would leave the rail unable to filter by what was just created.
+                facets.reload();
+                lib.reload();
+              }}
+              onClear={() => setSelected(new Set())}
+            />
           )}
         </div>
 

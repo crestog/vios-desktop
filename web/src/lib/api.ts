@@ -172,6 +172,23 @@ export const getStatus = (signal?: AbortSignal) =>
 export const getFacets = (signal?: AbortSignal) =>
   request<FacetsResponse>('/facets', {}, signal);
 
+/**
+ * File reels under a saved collection. One call for the whole selection,
+ * unlike `enqueueVideo` — this is a single statement about a set, and the server
+ * writes it in one transaction rather than N.
+ *
+ * Additive by contract: it never removes a label. `unknown` names any key the
+ * archive did not recognise, which is reported rather than silently dropped.
+ */
+export const addToCollection = (collection: string, keys: string[]) =>
+  request<{
+    ok: boolean;
+    collection: string;
+    videos: number;
+    added: number;
+    unknown: string[];
+  }>(`/collections/add${qs({ collection, keys: keys.join(',') })}`, { method: 'POST' });
+
 export const getBundles = (signal?: AbortSignal) =>
   request<BundlesResponse>('/bundles', {}, signal);
 
@@ -210,6 +227,8 @@ export interface SearchArgs {
   sort?: string;
   creator?: string;
   category?: string;
+  /** One saved collection. Narrows the videos, never the moments inside them. */
+  collection?: string;
   source?: string;
   video?: string;
   min_dur?: number;
@@ -274,6 +293,8 @@ export interface LibraryArgs {
   sort?: string;
   creator?: string;
   category?: string;
+  /** One saved collection, asked of the membership table server-side. */
+  collection?: string;
   /** 'speech' | 'narrative' | 'playable' — filters the data actually supports. */
   has?: string;
   q?: string;

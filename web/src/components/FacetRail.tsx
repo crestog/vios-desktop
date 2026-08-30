@@ -18,6 +18,11 @@
  *     `/api/facets`'s totals rather than the result set's, because a source
  *     filter built from the current results can only ever narrow further, never
  *     widen — the one thing you want it for.
+ *
+ *   - **A collection count is filings, not videos.** One reel filed on two
+ *     shelves is counted by both, so the numbers in that group sum past the
+ *     archive's video count. That is the many-to-one relationship being honest
+ *     rather than a duplicate: picking either shelf still returns the reel once.
  */
 
 import { useState } from 'react';
@@ -39,8 +44,10 @@ const DURATIONS: Array<{ label: string; min?: number; max?: number }> = [
 export interface FacetRailProps {
   creators?: Facet[];
   categories?: Facet[];
+  /** Saved collections. Counts are filings, so they sum past the video count. */
+  collections?: Facet[];
   channels?: Array<{ channel: ChannelName; count: number }>;
-  active: { creator: string; category: string; source: string };
+  active: { creator: string; category: string; source: string; collection?: string };
   minDur?: number;
   maxDur?: number;
   minHits?: number;
@@ -118,6 +125,7 @@ function ValueList({
 export default function FacetRail({
   creators,
   categories,
+  collections,
   channels,
   active,
   minDur,
@@ -126,7 +134,7 @@ export default function FacetRail({
   onChange,
 }: FacetRailProps) {
   const any =
-    Boolean(active.creator || active.category || active.source) ||
+    Boolean(active.creator || active.category || active.source || active.collection) ||
     minDur !== undefined ||
     maxDur !== undefined ||
     (minHits ?? 0) > 1;
@@ -140,7 +148,15 @@ export default function FacetRail({
           <button
             className="btn-ghost"
             onClick={() =>
-              onChange({ creator: '', category: '', source: '', min_dur: '', max_dur: '', min_hits: '' })
+              onChange({
+                creator: '',
+                category: '',
+                source: '',
+                collection: '',
+                min_dur: '',
+                max_dur: '',
+                min_hits: '',
+              })
             }
             title="clear every filter"
           >
@@ -148,6 +164,18 @@ export default function FacetRail({
           </button>
         )}
       </div>
+
+      {/* First, because it is the only filter the person built themselves. The
+          count is filings rather than videos, which is why these add up past the
+          archive's video count — one reel on two shelves is counted by both, and
+          picking either one still finds it exactly once. */}
+      <Group title="Collection" count={collections?.length}>
+        <ValueList
+          values={collections || []}
+          active={active.collection || ''}
+          onPick={(v) => onChange({ collection: v })}
+        />
+      </Group>
 
       <Group title="Creator" count={creators?.length}>
         <ValueList

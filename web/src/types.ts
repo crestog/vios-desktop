@@ -87,6 +87,17 @@ export interface VideoItem {
   has_file?: boolean;
   sources?: Record<string, number> | string;
 
+  // Identity. One reel can carry several names and arrive in several messages,
+  // and it can sit on several shelves at once — that is the whole point of the
+  // membership table behind `collections`. The server decodes all four from
+  // `video_index` so a card never asks a second time, and every one of them is
+  // optional because a database built before the identity era has none.
+  aliases?: string[];
+  messages?: number[];
+  collections?: string[];
+  /** Set when this row is a byte-identical re-upload of another video. */
+  twin_of?: string[];
+
   // Search-only. `best` is the single strongest passage; `moments` are all of
   // this video's hits in time order, which is what the card's spectrum draws.
   rank?: number;
@@ -116,7 +127,7 @@ export interface SearchResponse {
   sort?: string;
   /** Before filters. `total` is after — "18 of 340, narrowed by your filters". */
   matched?: number;
-  facets?: { creators: Facet[]; categories: Facet[] };
+  facets?: { creators: Facet[]; categories: Facet[]; collections?: Facet[] };
   filters?: Record<string, unknown>;
   candidates?: { lexical: number; dense: number; fused: number };
   took_ms?: number;
@@ -137,8 +148,16 @@ export interface LibraryResponse {
 export interface FacetsResponse {
   creators: Facet[];
   categories: Facet[];
+  /** Saved collections. `count` is filings, so these sum past `totals.videos`. */
+  collections?: Facet[];
   sources: Record<string, number>;
-  totals: { videos: number; moments: number };
+  totals: {
+    videos: number;
+    moments: number;
+    /** Distinct shelves, and total filings — the two differ on purpose. */
+    collections?: number;
+    memberships?: number;
+  };
 }
 
 /** `/api/status` — what the archive is, right now. */
