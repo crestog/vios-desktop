@@ -46,6 +46,7 @@ import {
   ArrowDownToLine,
   ChevronLeft,
   Copy,
+  Images,
   Link2,
   PanelRightClose,
   PanelRightOpen,
@@ -274,6 +275,19 @@ export default function WatchView({ route }: ViewProps) {
             {detail.data?.playback?.size ? ` · ${fmtBytes(detail.data.playback.size)}` : ''}
           </span>
         )}
+        {/* Searching by a frame is the one visual mode that needs no model, and
+            the playhead is the only place a user can point at a frame without
+            already knowing its index. An anchor rather than a button, so it
+            middle-clicks into a second window like every other route here. */}
+        <a
+          className="btn-ghost"
+          href={href('search', {
+            params: { lane: 'frames', frame: key, ft: at.toFixed(2) },
+          })}
+          title="find frames across the archive that look like this moment"
+        >
+          <Images size={12} /> like this
+        </a>
         <button
           className="btn-ghost"
           onClick={() => {

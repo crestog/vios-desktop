@@ -7,7 +7,7 @@
  * density, view mode — lives in the store, because a column count has no
  * business travelling in a shared link.
  *
- * Two decisions worth reading before editing:
+ * Three decisions worth reading before editing:
  *
  *   - **Paging grows the limit instead of walking offsets.** Asking for 120 and
  *     then 180 re-fetches rows already on screen, which sounds wasteful and is
@@ -21,6 +21,15 @@
  *     holds the previous data through a reload and exposes `loading` beside it;
  *     blanking to a skeleton on every keystroke makes a 90 ms search *feel*
  *     slower than a 400 ms one.
+ *
+ *   - **The Frames lane has two queries, and only one of them needs a model.**
+ *     `?frame=<key>&ft=<seconds>` asks "more frames like this frame": the query
+ *     vector is already in the database, so it is a cosine against a matrix and
+ *     it answers with nothing installed. A typed phrase has to go through CLIP's
+ *     text tower, which means torch. This lane used to send only the phrase, so
+ *     on a machine without torch every frame search failed and the mode that
+ *     needed nothing was unreachable — implemented in the server, implemented in
+ *     the client, and called from nowhere.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -32,6 +41,7 @@ import {
   List,
   SlidersHorizontal,
   Type,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ViewProps } from '../lib/router';
@@ -39,7 +49,7 @@ import { go, num } from '../lib/router';
 import { SEARCH_SORTS, getFacets, searchArchive, searchVisual } from '../lib/api';
 import { useDensity, useGridMode, store, type GridMode } from '../lib/store';
 import { useDebounced, useFetch } from '../lib/useFetch';
-import { fmtCount, fmtMs, plural } from '../lib/format';
+import { fmtCount, fmtMs, fmtT, plural } from '../lib/format';
 import { channelTally } from '../lib/channels';
 import Results from '../components/Results';
 import FacetRail from '../components/FacetRail';
@@ -67,6 +77,13 @@ export default function SearchView({ route }: ViewProps) {
   const maxDur = num(p, 'max_dur');
   const minHits = num(p, 'min_hits');
 
+  // The frame query. `frame` may be `<key>` or `<key>:<idx>`; `ft` is seconds,
+  // which the server turns into a frame index because it holds `fps` and the
+  // browser does not.
+  const frameRef = p.get('frame') || '';
+  const frameT = num(p, 'ft');
+  const byFrame = lane === 'frames' && frameRef.length > 0;
+
   const density = useDensity();
   const mode = useGridMode();
 
@@ -88,6 +105,8 @@ export default function SearchView({ route }: ViewProps) {
         collection,
         source,
         lane: lane === 'frames' ? 'frames' : '',
+        // Typing is a new question. A phrase and "like this frame" are different
+        // queries, so one replaces the other rather than silently losing.
       },
       replace: true,
     });
@@ -125,9 +144,12 @@ export default function SearchView({ route }: ViewProps) {
   );
 
   const frames = useFetch(
-    (signal) => searchVisual({ q: urlQ, limit: 120 }, signal),
-    [urlQ],
-    { enabled: enabled && lane === 'frames' }
+    (signal) =>
+      byFrame
+        ? searchVisual({ frame: frameRef, t: frameT, limit: 120 }, signal)
+        : searchVisual({ q: urlQ, limit: 120 }, signal),
+    [byFrame, frameRef, frameT, urlQ],
+    { enabled: lane === 'frames' && (byFrame || enabled) }
   );
 
   // Channel counts for the source filter come from the archive as a whole, not
@@ -138,6 +160,10 @@ export default function SearchView({ route }: ViewProps) {
 
   const res = text_.data;
   const items = res?.results || [];
+
+  // A frame query is a real query even with an empty box, so the placeholder
+  // must not claim nothing has been asked.
+  const asked = enabled || byFrame;
 
   const set = (patch: Record<string, unknown>) =>
     go('search', {
@@ -152,6 +178,8 @@ export default function SearchView({ route }: ViewProps) {
         max_dur: maxDur,
         min_hits: minHits,
         lane: lane === 'frames' ? 'frames' : '',
+        frame: frameRef,
+        ft: frameT,
         ...patch,
       },
     });
@@ -180,11 +208,22 @@ export default function SearchView({ route }: ViewProps) {
           <button
             className={lane === 'frames' ? 'on' : ''}
             onClick={() => set({ lane: 'frames' })}
-            title="frames that look like the phrase — one result per frame, not per reel"
+            title="one result per frame, not per reel — by phrase, or by a frame you point at"
           >
             <ImageIcon size={12} /> Frames
           </button>
         </div>
+
+        {byFrame && (
+          <button
+            className="q-chip"
+            onClick={() => set({ frame: '', ft: '' })}
+            title="stop searching by that frame and go back to the phrase"
+          >
+            like {frameRef.split(':')[0]}
+            {frameT ? ` @ ${fmtT(frameT)}` : ''} <X size={11} />
+          </button>
+        )}
 
         {lane === 'text' && (
           <>
@@ -237,7 +276,14 @@ export default function SearchView({ route }: ViewProps) {
         <span className="view-sub" aria-live="polite">
           {lane === 'frames'
             ? frames.data
-              ? `${plural(frames.data.count, 'frame')} · ${fmtMs(frames.data.took_ms)}`
+              ? `${plural(frames.data.count, 'frame')}${
+                  // How much of the archive was actually compared. Worth showing:
+                  // the shortlist used to score nine reels of thirty and report
+                  // nothing about the twenty-one it skipped.
+                  frames.data.searched_videos
+                    ? ` from ${plural(frames.data.searched_videos, 'reel')} searched`
+                    : ''
+                } · ${fmtMs(frames.data.took_ms)}${frames.loading ? ' · …' : ''}`
               : ''
             : res
               ? `${fmtCount(res.total)}${
@@ -267,7 +313,7 @@ export default function SearchView({ route }: ViewProps) {
         )}
 
         <div className="split-main">
-          {!enabled ? (
+          {!asked ? (
             <div className="state-box">
               <div className="head">Search the archive</div>
               <div>
@@ -283,6 +329,8 @@ export default function SearchView({ route }: ViewProps) {
               first={frames.first}
               loading={frames.loading}
               q={urlQ}
+              byFrame={byFrame}
+              onPivot={(key, t) => set({ frame: key, ft: t.toFixed(2) })}
             />
           ) : (
             <Results

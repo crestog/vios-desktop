@@ -3988,6 +3988,57 @@ a.stat:hover {
 .frame-t { color: var(--text-primary); }
 .frame-space { color: var(--text-disabled); text-transform: uppercase; letter-spacing: 0.04em; }
 
+/* The pivot — "more frames like this one". Hidden until the tile is hovered or
+   something inside it has focus, because it sits on top of the image and a grid
+   of a hundred always-visible badges is a grid of badges, not of frames. Focus
+   is in the selector as well as hover: keyboard users cannot hover, and a
+   control that is reachable by Tab but invisible when it gets there is worse
+   than one that does not exist. */
+.frame-pivot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: rgba(6, 6, 8, 0.72);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), border-color var(--transition-fast);
+}
+.frame-tile:hover .frame-pivot,
+.frame-tile:focus-within .frame-pivot,
+.frame-pivot:focus-visible { opacity: 1; }
+.frame-pivot:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+
+/* The active frame query, shown in the view-bar as something removable. A frame
+   search has no words in the box, so without this the lane would be filtering by
+   something the screen never names. */
+.q-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 0 8px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent-primary);
+  background: var(--accent-glow);
+  border: 1px solid var(--accent-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.q-chip:hover { background: var(--accent-primary); color: var(--bg-deep); }
+
 /* ── View-bar controls: density, and a plain select ── */
 .dens {
   display: inline-flex;
