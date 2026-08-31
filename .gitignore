@@ -21,6 +21,7 @@ logs/
 *.db-wal
 *.db-shm
 *.vec
+*.ids
 *.vec.json
 
 # CREDENTIAL MATERIAL. A pyrogram .session file authenticates as the account
