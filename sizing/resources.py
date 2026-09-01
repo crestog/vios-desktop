@@ -25,6 +25,8 @@ import re
 import shutil
 import subprocess
 
+from atlas.subproc import FOREGROUND
+
 # Leave this much VRAM unallocated per card. CUDA's own context is ~300 MB, the
 # allocator fragments, and a batch that fits in theory OOMs in practice on the
 # frame that happens to be 1080×1920 instead of 720×1280. Reserving a gigabyte
@@ -42,7 +44,8 @@ def _nvidia_smi() -> list:
             ["nvidia-smi",
              "--query-gpu=index,name,memory.total,memory.used,compute_cap",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30,
+            creationflags=FOREGROUND)
     except (OSError, subprocess.SubprocessError):
         return []
     if res.returncode != 0:

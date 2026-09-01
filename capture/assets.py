@@ -60,6 +60,8 @@ import subprocess
 import tarfile
 import time
 
+from atlas.subproc import BACKGROUND
+
 # ── knobs ─────────────────────────────────────────────────────────────────
 # 2 seconds is the shortest clip that reliably contains a keyframe in a reel
 # encoded at the usual 2 s GOP, and it is also about the length of a hover
@@ -98,9 +100,13 @@ def _sha256(path: str) -> str:
 
 
 def _run(argv: list, timeout: float) -> tuple:
+    # `BACKGROUND`: every caller of this is asset backfill — segmenting a reel
+    # into hover clips, building sprite sheets — which is minutes of ffmpeg that
+    # nobody is watching a spinner for. It yields to the window instead of
+    # competing with it, and it does not open a console. See `atlas/subproc.py`.
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, creationflags=BACKGROUND)
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout:.0f}s"
     except OSError as exc:

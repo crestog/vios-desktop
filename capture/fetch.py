@@ -54,6 +54,8 @@ import subprocess
 import sys
 import time
 
+from atlas.subproc import BACKGROUND, FOREGROUND
+
 RECORD_SCHEMA = 1
 
 # Classification of the fetcher's own complaint. Hostile is tested first: a
@@ -156,7 +158,7 @@ def tool_versions() -> dict:
     for name, args in probes:
         try:
             res = subprocess.run(args, capture_output=True, text=True,
-                                 timeout=60)
+                                 timeout=60, creationflags=FOREGROUND)
             if res.returncode == 0 and res.stdout:
                 line = res.stdout.strip().splitlines()[0]
                 # ffmpeg answers with a whole banner ("ffmpeg version 8.1.2-full
@@ -198,10 +200,14 @@ def _first_error(blob: str) -> str:
 # Running the fetchers
 # ═══════════════════════════════════════════════════════════════════════
 def _run(argv: list, timeout: float) -> tuple[int, str]:
+    # `BACKGROUND`: a fetch is a download and a remux, both of which take as
+    # long as the network and the file decide. The readiness probes above are
+    # `FOREGROUND` because a panel is waiting on them. Neither gets a console —
+    # three version probes at startup were three windows. See `atlas/subproc.py`.
     try:
         res = subprocess.run(argv, capture_output=True, text=True,
                              encoding="utf-8", errors="replace",
-                             timeout=timeout)
+                             timeout=timeout, creationflags=BACKGROUND)
     except subprocess.TimeoutExpired:
         raise FetchError(f"fetch timed out after {timeout:.0f}s", "transient")
     except OSError as e:

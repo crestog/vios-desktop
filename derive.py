@@ -58,13 +58,13 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import time
 
 import paths
 from atlas import config
 from atlas.media import local_proxy_path as proxy_path, safe_name
+from atlas.subproc import BACKGROUND
 from logger import vios_log as log
 
 SUB = "MEDIA"
@@ -102,11 +102,13 @@ def _get_key_lock(key: str) -> threading.Lock:
             _KEY_LOCKS[key] = lock
         return lock
 
-if sys.platform == "win32":
-    _BELOW_NORMAL = 0x00004000          # BELOW_NORMAL_PRIORITY_CLASS
-    _CREATIONFLAGS = _BELOW_NORMAL | subprocess.CREATE_NO_WINDOW
-else:
-    _CREATIONFLAGS = 0
+
+# Kept under this name because `runners/ff.py` imports it from here, and because
+# it was the only correct copy of this in the tree — every other spawn site was
+# missing it, which is what put console windows on screen during a search.
+# Defined in `atlas/subproc.py` now so there is one of it. See that module for
+# why the priority is a second flag rather than part of the first.
+_CREATIONFLAGS = BACKGROUND
 
 
 # ── Where things land ─────────────────────────────────────────────────────

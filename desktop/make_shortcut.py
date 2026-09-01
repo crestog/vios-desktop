@@ -32,6 +32,8 @@ import os
 import subprocess
 import sys
 
+from atlas.subproc import FOREGROUND
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 
@@ -93,7 +95,8 @@ def create() -> str:
     proc = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive",
          "-ExecutionPolicy", "Bypass", "-Command", _PS],
-        capture_output=True, text=True, env=env, timeout=120)
+        capture_output=True, text=True, env=env, timeout=120,
+        creationflags=FOREGROUND)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"could not write the shortcut — {detail[:600]}")
