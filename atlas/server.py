@@ -32,7 +32,7 @@ import threading
 import time
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+from fastapi.responses import (HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 
 from . import (config, graph, identity, index, ingest, maps, media, reflect,
@@ -93,6 +93,73 @@ def _index_if_stale(conn: sqlite3.Connection, force: bool = False) -> bool:
     _boot_set(detail="deriving the relationship graph")
     _rebuild_graph(conn)
     return True
+
+
+_INDEX_LOCK = threading.Lock()
+_INDEX_PENDING = 0
+_INDEX_LAST = 0.0
+_INDEX_MIN_GAP = float(os.environ.get("ATLAS_INDEX_MIN_GAP", "45"))
+
+
+def _index_if_due(conn: sqlite3.Connection, added: int = 0,
+                  force: bool = False) -> bool:
+    """`_index_if_stale`, but not once per shard during a cold scan.
+
+    A rebuild is whole-archive: `DELETE FROM moments`, a full re-INSERT, an FTS5
+    delete-all-rebuild-optimize, a graph derivation, and a dense re-embed of
+    every passage — then, downstream of the embed, a fresh UMAP projection. The
+    per-import callback used to call it directly with `force=bool(added)`, and in
+    a cold scan every shard adds rows, so the brake was never applied. 82 imports
+    ran it about 76 times and threw 75 of those away, spending essentially the
+    whole 488-second boot to arrive at 1,895 passages. The log said so on every
+    pass — `dense vectors discarded — a newer index build superseded this one` is
+    the embed thread finding a newer `index_build_id` stamped in meta and
+    correctly refusing to write vectors keyed to `moments.id`s that the next
+    DELETE already reassigned.
+
+    `added` was not a sufficient brake for a second reason either: it sums the
+    whole `merged` dict `import_shard` returns, which also carries `identity` and
+    `vec:<kind>` counts, so an import that moved no passage-bearing row at all
+    could still force a full rebuild.
+
+    So the policy lives here instead, and it is deliberately the same shape and
+    the same 45 seconds as `vsearch.build_if_due`, which already had this problem
+    and solved it — note the two sit two lines apart in `after_bundle`, and only
+    the image index was debounced. The first build still happens immediately, so
+    the intent that made the per-import call worth having in the first place
+    survives: the first shard is searchable while the rest are still downloading.
+
+    `force` is the end-of-scan flush and it is not optional. `_index_if_stale`
+    skips when the schema fingerprint has not moved, and `reflect.fingerprint`
+    hashes the schema's *shape* only — tables and columns, nothing else. A scan
+    that imported eighty shards of rows into existing columns leaves it
+    unchanged, so a debounce without the forced flush would have left every one
+    of those rows out of the index and looked like a very fast boot.
+
+    Anything that routes a live, open-ended import through here needs the same
+    flush at the end of it, or rows land, go unindexed, and the next boot's
+    fingerprint check agrees there is nothing to do.
+    """
+    global _INDEX_PENDING, _INDEX_LAST
+    with _INDEX_LOCK:
+        _INDEX_PENDING += max(int(added or 0), 0)
+        if not _INDEX_PENDING and not force:
+            return False
+        first = _INDEX_LAST == 0.0
+        if not force and not first \
+                and (time.time() - _INDEX_LAST) < _INDEX_MIN_GAP:
+            return False
+        pending, _INDEX_PENDING = _INDEX_PENDING, 0
+        _INDEX_LAST = time.time()
+    try:
+        return _index_if_stale(conn, force=bool(pending))
+    except Exception:
+        # The pending count is the only record that work is outstanding, and
+        # zeroing it above already spent it. Put it back so the next call — or
+        # the forced flush at the end of the scan — still knows to build.
+        with _INDEX_LOCK:
+            _INDEX_PENDING += pending
+        raise
 
 
 def _rebuild_graph(conn: sqlite3.Connection) -> None:
@@ -167,16 +234,15 @@ def _boot() -> None:
             # Re-index after each bundle rather than only at the end, so the
             # first bundle is searchable while the rest are still downloading.
             #
-            # Only when the import actually carried rows, though. A forced
-            # rebuild is a DELETE of every moment, a full re-INSERT, an FTS5
-            # rebuild, a graph derivation and a dense re-embed of every passage;
-            # doing that for a shard whose tables were all already held is
-            # minutes of work that cannot change a single row. `force=False`
-            # still rebuilds when the schema fingerprint moved, so a bundle
-            # carrying a new column is picked up either way.
+            # `_index_if_due` owns how often that is worth doing. This used to
+            # call `_index_if_stale` with `force=bool(added)`, on the theory that
+            # rows-landed was a brake — but in a cold scan every shard lands
+            # rows, so it braked nothing and the whole archive was re-indexed
+            # once per shard. The image index two lines below already had the
+            # debounce this needed.
             added = sum(int(v or 0) for v in (result.get("rows") or {}).values())
             try:
-                _index_if_stale(bundle_conn, force=bool(added))
+                _index_if_due(bundle_conn, added)
             except Exception as e:
                 log(f"index after bundle {result.get('seq')} failed — {e}")
             # And the image index, on its own debounce. A shard that carried no
@@ -190,8 +256,12 @@ def _boot() -> None:
 
         ingest.scan_and_import(full=True, on_bundle=after_bundle)
 
+    # The end-of-scan flush, and it has to be forced. Whatever the debounce was
+    # still holding is indexed here, and `_index_if_stale`'s own fingerprint
+    # check cannot be relied on to notice: it hashes the schema's shape, and a
+    # scan that imported rows into existing columns does not move it.
     try:
-        _index_if_stale(conn)
+        _index_if_due(conn, force=True)
     except Exception as e:
         log(f"index build failed — {type(e).__name__}: {e}")
         _boot_set(error=f"{type(e).__name__}: {e}")
@@ -519,7 +589,16 @@ def rescan(full: bool = True, max_messages: int = 0,
         return False
 
     def after(conn, result):
-        # Forced only when rows actually landed — see `after_bundle` in _boot().
+        # Deliberately not `_index_if_due`, unlike `after_bundle` in `_boot()`.
+        # `scan_in_background` hands `scan_and_import` to a thread and returns
+        # (ingest.scan_in_background), so there is no completion hook and nowhere
+        # to put the forced flush a debounce depends on. Debouncing here would
+        # leave the tail of a live scan unindexed until the next boot — and since
+        # `reflect.fingerprint` only moves when the *schema* does, "the next boot"
+        # would agree there was nothing to build. This is also the path the
+        # debounce was never needed on: a live rescan is roughly one shard a
+        # minute, not a hundred back to back, which is the same reason
+        # `vsearch.build_if_due` gives for being safe when called from here.
         added = sum(int(v or 0) for v in (result.get("rows") or {}).values())
         try:
             _index_if_stale(conn, force=bool(added))
@@ -719,6 +798,53 @@ def api_vsearch_warm():
     return {"ok": ok, "encoder": vsearch.state()["encoder"]}
 
 
+def _jpeg_response(path: str):
+    """Serve a rendered poster from bytes rather than by path.
+
+    `FileResponse` stats the path to build Content-Length, sends the header
+    frame, and only *then* opens the same path again to read the body — two
+    filesystem touches with a gap between them (starlette sends
+    `http.response.start` at responses.py:385 and opens the file at :391).
+
+    Posters are rendered by ffmpeg writing `-y` straight into that same file,
+    and the cache filename keeps whole seconds (`media.poster`) while the URL
+    keeps decimals, so `?t=12.3` and `?t=12.4` are two different requests —
+    different browser cache entries, no dedup — that both render a
+    *different-sized* JPEG over one path. When one landed inside the gap,
+    uvicorn found the declared and delivered lengths disagreeing and raised
+    `RuntimeError: Response content longer than Content-Length`; when the
+    rewrite went the other way it raised `shorter`. Both were in the log,
+    several times each, because this is the most-requested route in the app.
+
+    Reading once makes Content-Length `len(raw)` by construction, so the two
+    numbers come out of the same read and cannot disagree whatever the
+    filesystem does underneath. A poster is a 480px-wide JPEG at `-q:v 5` —
+    tens of KB, immutable for a week — so buffering it costs nothing. What it
+    gives up is `Range` support and the stat-derived `last-modified`/`etag`,
+    none of which an `<img>` tag asks for.
+
+    The 204s are the same answer the callers already give for no poster at all,
+    which is the honest reply for a file that vanished or was caught truncated.
+
+    A blocking `open().read()` inside an ASGI app is normally the wrong shape,
+    and it is only correct here because both callers — `api_frame` and
+    `api_poster` — are declared `def`, not `async def`. Starlette runs a sync
+    endpoint in a threadpool, so this read blocks a worker thread and never the
+    event loop. Making either route `async` would move this call onto the loop,
+    where tens of KB off a cold cache disk would stall every other request in the
+    process; the fix then would be `run_in_threadpool`, not a smaller read.
+    """
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return Response(status_code=204)
+    if not raw:
+        return Response(status_code=204)
+    return Response(raw, media_type="image/jpeg", headers={
+        "Cache-Control": "public, max-age=604800, immutable"})
+
+
 @app.get("/api/frame/{video_key}")
 def api_frame(video_key: str, i: int = 0, t: float = None):
     """Render one frame of one video, for an image-search result thumbnail.
@@ -733,8 +859,7 @@ def api_frame(video_key: str, i: int = 0, t: float = None):
     path = media.poster(db(), key, at=at)
     if not path:
         return Response(status_code=204)
-    return FileResponse(path, media_type="image/jpeg", headers={
-        "Cache-Control": "public, max-age=604800, immutable"})
+    return _jpeg_response(path)
 
 
 # ── library ───────────────────────────────────────────────────────────────
@@ -1537,8 +1662,7 @@ def api_poster(video_key: str, t: float = None):
     path = media.poster(db(), key, at=t)
     if not path:
         return Response(status_code=204)
-    return FileResponse(path, media_type="image/jpeg", headers={
-        "Cache-Control": "public, max-age=604800, immutable"})
+    return _jpeg_response(path)
 
 
 @app.post("/api/cache/clear")

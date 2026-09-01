@@ -935,6 +935,70 @@ def artifact_file(conn: sqlite3.Connection, video_key: str, kind: str,
         ev.set()
 
 
+def _render_frame(src: str, seek: float, dest: str) -> str:
+    """Cut one frame to `dest`, atomically. Returns `dest` or "".
+
+    The atomicity is the whole point of this function existing. Both callers
+    used to hand ffmpeg `-y dest` directly, and `-y` truncates the output file
+    on open — so a poster already being served went to zero bytes and grew back
+    while a reader was mid-response. That produced a torn JPEG on screen, and
+    on the wire it produced `RuntimeError: Response content longer than
+    Content-Length` (and, when the race landed the other way, `shorter`) out of
+    uvicorn, several times a session.
+
+    It is not a rare interleaving. The cache filename keeps whole seconds while
+    the URL keeps decimals, so `?t=12.3` and `?t=12.4` are two separate
+    requests — separate browser cache entries, nothing dedupes them — that both
+    render over `<key>_12.jpg`, at different seek positions, producing
+    different-sized files. `poster()` and `clip_poster()` also name their output
+    identically, so they race each other as well as themselves.
+
+    `artifact_file` and `clip_fetch` in this same module already write to a temp
+    path and `os.replace` into place; this is that pattern for the two ffmpeg
+    render paths, with two differences forced by what they are:
+
+    - the temp name keeps a `.jpg` suffix, because ffmpeg's image2 muxer picks
+      the output format from the extension and a bare `.part` fails with
+      "Unable to find a suitable output format".
+    - the temp name is unique per writer rather than the shared `dest + ".part"`
+      those two use, because they serialise on an in-flight Event and this does
+      not — concurrent renders of the same second are the normal case here, and
+      they must not share a scratch file.
+
+    -ss before -i seeks by keyframe without decoding the file up to that point:
+    milliseconds instead of seconds on a long clip. The frame may land slightly
+    early, which does not matter for a thumbnail.
+    """
+    tmp = f"{dest}.{os.getpid()}.{threading.get_ident()}.part.jpg"
+    cmd = [_FFMPEG, "-nostdin", "-loglevel", "error", "-ss", f"{seek:.2f}",
+           "-i", src, "-frames:v", "1", "-vf", "scale=480:-2",
+           "-q:v", "5", "-y", tmp]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=25)
+        if r.returncode == 0 and os.path.exists(tmp) \
+                and os.path.getsize(tmp) > 0:
+            try:
+                os.replace(tmp, dest)
+                return dest
+            except OSError:
+                # Windows refuses to rename over a file another thread holds
+                # open. Whoever holds it open is serving a complete poster for
+                # this same second, so that file is the right answer — return it
+                # rather than reporting no poster and drawing a grey rectangle.
+                if os.path.exists(dest) and os.path.getsize(dest) > 0:
+                    return dest
+                return ""
+    except (subprocess.SubprocessError, OSError):
+        pass
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    return ""
+
+
 def poster(conn: sqlite3.Connection, video_key: str, at: float = None) -> str:
     """A still frame, cached on disk. Returns a path or "".
 
@@ -977,23 +1041,23 @@ def poster(conn: sqlite3.Connection, video_key: str, at: float = None) -> str:
 
     stamp = f"{pos:.0f}"
     dest = os.path.join(config.POSTER_CACHE, f"{_safe(key)}_{stamp}.jpg")
+    # No in-flight Event here, unlike `artifact_file` and `clip_fetch`, and this
+    # early return is the whole reason one is not needed: a duplicate render is
+    # 25 ms of ffmpeg over a file already on disk, so two writers racing cost
+    # duplicated work and nothing else — where a duplicate *download* would cost
+    # the same bytes twice over Telegram.
+    #
+    # What makes that trade sound rather than merely cheap is that `_render_frame`
+    # publishes with `os.replace`. `getsize > 0` cannot tell a finished JPEG from
+    # one still being written: ffmpeg's image2 muxer grows the file as it encodes,
+    # so a reader arriving mid-render would find a nonzero size, return this path,
+    # and serve a truncated image. Rendering to a private temp name means every
+    # byte at `dest` was complete before the name existed, and this test is
+    # therefore reading a whole file or no file. It is only in the "cost" column
+    # because of the line it depends on.
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
-
-    # -ss before -i seeks by keyframe without decoding the file up to that
-    # point: milliseconds instead of seconds on a long clip. The frame may land
-    # slightly early, which does not matter for a thumbnail.
-    cmd = [_FFMPEG, "-nostdin", "-loglevel", "error", "-ss", f"{pos:.2f}",
-           "-i", found["path"], "-frames:v", "1", "-vf", "scale=480:-2",
-           "-q:v", "5", "-y", dest]
-    try:
-        r = subprocess.run(cmd, capture_output=True, timeout=25)
-        if r.returncode == 0 and os.path.exists(dest) \
-                and os.path.getsize(dest) > 0:
-            return dest
-    except (subprocess.SubprocessError, OSError):
-        pass
-    return ""
+    return _render_frame(found["path"], pos, dest)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1103,6 +1167,11 @@ def clip_poster(conn: sqlite3.Connection, video_key: str, at: float) -> str:
     pos = max(0.0, float(at))
     dest = os.path.join(config.POSTER_CACHE,
                         f"{_safe(video_key)}_{pos:.0f}.jpg")
+    # The same file `poster()` names for the same second, on purpose — whichever
+    # route reaches it first, the answer is the frame at this second — and so the
+    # same reasoning: unguarded because a duplicate render is cheap, and safe to
+    # read on `getsize > 0` only because `_render_frame` renames a finished file
+    # into place instead of growing this one.
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
     got = clip_fetch(conn, video_key, pos)
@@ -1111,17 +1180,7 @@ def clip_poster(conn: sqlite3.Connection, video_key: str, at: float) -> str:
     # Offset *within* the clip. The clip starts at t0, so asking ffmpeg for
     # `pos` would seek past the end of a two-second file and produce nothing.
     inner = max(0.0, pos - float(got.get("t0") or 0.0))
-    cmd = [_FFMPEG, "-nostdin", "-loglevel", "error", "-ss", f"{inner:.2f}",
-           "-i", got["path"], "-frames:v", "1", "-vf", "scale=480:-2",
-           "-q:v", "5", "-y", dest]
-    try:
-        r = subprocess.run(cmd, capture_output=True, timeout=25)
-        if r.returncode == 0 and os.path.exists(dest) \
-                and os.path.getsize(dest) > 0:
-            return dest
-    except (subprocess.SubprocessError, OSError):
-        pass
-    return ""
+    return _render_frame(got["path"], inner, dest)
 
 
 # ══════════════════════════════════════════════════════════════════════════

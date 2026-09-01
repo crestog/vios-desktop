@@ -634,6 +634,24 @@ def _execute(job: dict, atlas: sqlite3.Connection) -> None:
         return
 
     added = sum((out.get("rows") or {}).values())
+    lost = int(out.get("lost") or 0)
+    if lost:
+        # The replay said `ok` and still did not keep everything — a payload
+        # insert that raised, or a `video` row whose key no witness could resolve.
+        # Not `failed`: most of the shard landed, and marking the job failed would
+        # re-run the whole pass to re-measure rows that are already in the
+        # database. Recorded instead, in the two places that outlive this call.
+        #
+        # Recoverable without re-measuring anything, which is why this is a note
+        # and not an error: `import_local_shard` is called with `keep=True` by
+        # default, so the file is still under `paths.SHARD_DIR` and replaying it
+        # again once the failing insert is fixed lands exactly these rows —
+        # `_enrich` fills NULL columns of rows that already exist, so the
+        # already-imported majority is not duplicated by the second attempt.
+        notes = dict(notes, lost_rows=lost, shard_kept=shard)
+        log(f"{key}:{cid} replayed with {lost} row(s) lost — the shard is kept "
+            f"at {os.path.basename(shard)} and can be replayed again", SUB,
+            "WARN")
     _DIRTY_ROWS += added
     _finish(job["job_id"], "completed", "", notes, rows=res["rows"],
             shard=shard)
