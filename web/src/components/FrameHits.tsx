@@ -166,6 +166,21 @@ export default function FrameHits({
               </>
             ),
           };
+        case 'bad_query':
+          return {
+            // Not an empty result — a request that was never a search. Almost
+            // always a stale link: a `?frame=` naming a reel that has since been
+            // removed, or hand-edited into something that does not parse. The
+            // default arm would have called that an archive with nothing like it.
+            head: 'That was not a search',
+            body: (
+              <>
+                {reason}. If you arrived here from a saved link, the reel it names
+                may no longer be in the archive — type a phrase, or open a reel and
+                use &ldquo;frames like this moment&rdquo;.
+              </>
+            ),
+          };
         default:
           return {
             head: 'No frames matched',

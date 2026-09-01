@@ -272,8 +272,9 @@ export interface VisualSearchResponse {
   /**
    * Why the list is empty, as a fixed token. One of `no_numpy`, `no_index`,
    * `no_vectors`, `empty_query`, `no_match`, `no_encoder`, `encode_failed`,
-   * `no_vision_tower`, `bad_image` — the vocabulary is defined above
-   * `vsearch.search_vector` in the Python.
+   * `no_vision_tower`, `bad_image`, `bad_query` — the vocabulary is defined
+   * above `vsearch.search_vector` in the Python, except `bad_query`, which the
+   * route emits and which means the request was never a search.
    *
    * This exists because the frames lane used to decide "that search needs a
    * model" by matching `/torch|transformers|module|encoder|model/i` against
