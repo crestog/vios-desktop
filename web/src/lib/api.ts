@@ -267,14 +267,50 @@ export interface VisualSearchResponse {
   space: string;
   query?: Record<string, unknown>;
   searched_videos?: number;
-  /** Why the list is empty — four different causes look identical otherwise. */
+  /** The sentence to show. Free prose — never branch on it, see `cause`. */
   reason?: string;
+  /**
+   * Why the list is empty, as a fixed token. One of `no_numpy`, `no_index`,
+   * `no_vectors`, `empty_query`, `no_match`, `no_encoder`, `encode_failed`,
+   * `no_vision_tower`, `bad_image` — the vocabulary is defined above
+   * `vsearch.search_vector` in the Python.
+   *
+   * This exists because the frames lane used to decide "that search needs a
+   * model" by matching `/torch|transformers|module|encoder|model/i` against
+   * `reason`, and `AttributeError: 'BaseModelOutputWithPooling' object has no
+   * attribute 'norm'` matched on the word *Model* inside a class name. It told
+   * people to install a model that was loaded and working. `no_encoder` means
+   * something is missing; `encode_failed` means this code is broken. They need
+   * opposite responses and they must not be guessed apart from prose.
+   */
+  cause?: string;
 }
 
 export const searchVisual = (
   args: { q?: string; frame?: string; t?: number; space?: string; limit?: number; same_video?: boolean },
   signal?: AbortSignal
 ) => request<VisualSearchResponse>(`/vsearch${qs(args as Record<string, unknown>)}`, {}, signal);
+
+/**
+ * Reverse image search — mode 2. Frames that look like a picture you hand it.
+ *
+ * The one query in this application that cannot live in the URL, which is why it
+ * took this long to appear in the interface: `?q=` and `?frame=` are shareable
+ * and reloadable, and a file is neither. So an image query is session state, it
+ * dies on refresh, and the control says so rather than pretending otherwise.
+ *
+ * Needs the vision tower, i.e. torch — unlike `?frame=`, which compares vectors
+ * already in the database and needs nothing. When torch is blocked the server
+ * answers `cause: 'no_vision_tower'` and the lane points at the frame pivot.
+ */
+export const searchImage = (file: File | Blob, limit = 120, signal?: AbortSignal) => {
+  const body = new FormData();
+  // A pasted screenshot is a `Blob` with no name and FastAPI's `File(...)`
+  // wants a filename part; without the third argument the upload arrives as a
+  // plain field and the endpoint answers "the upload was empty".
+  body.append('file', file, (file as File).name || 'pasted.png');
+  return request<VisualSearchResponse>(`/vsearch/image${qs({ limit })}`, { method: 'POST', body }, signal);
+};
 
 export const suggest = (q: string, limit = 8, signal?: AbortSignal) =>
   request<{ suggestions: string[] }>(`/suggest${qs({ q, limit })}`, {}, signal);

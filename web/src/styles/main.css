@@ -4039,6 +4039,48 @@ a.stat:hover {
 }
 .q-chip:hover { background: var(--accent-primary); color: var(--bg-deep); }
 
+/* ── The picture query ──
+   "By picture" is a `<label>` wrapping a hidden file input, not a button, so it
+   reads as an affordance rather than an active query: quieter than `.q-chip`,
+   which is reserved for state you can remove. It also has to survive a file
+   being *dragged onto it*, which is why the native input is still in there. */
+.pick-shot {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: var(--border-subtle);
+}
+.pick-shot:hover {
+  color: var(--accent-primary);
+  background: var(--accent-glow);
+  border-color: var(--accent-primary);
+}
+
+/* The active picture query. Padded left for the thumbnail, which is the only
+   part of this interface that shows the query itself rather than naming it —
+   worth the 20 pixels, because "like this picture" is otherwise unverifiable
+   once the file dialog has closed. */
+.shot-chip { padding-left: 3px; }
+.shot-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 2px;
+  object-fit: cover;
+  background: var(--bg-deep);
+  flex: none;
+}
+
+/* Drag feedback on the results pane. Inset rather than a real border: a border
+   would change the pane's box and shove every tile sideways mid-drag, which
+   makes the drop target move while you are aiming at it. */
+.split-main.dropping {
+  box-shadow: inset 0 0 0 2px var(--accent-primary);
+  background: var(--accent-glow);
+}
+/* The pane's children must not eat the drop. `dragleave` from a child is what
+   the depth counter in Search.tsx exists to absorb; killing pointer events for
+   the duration means far fewer of those events to absorb in the first place. */
+.split-main.dropping > * { pointer-events: none; }
+
 /* ── View-bar controls: density, and a plain select ── */
 .dens {
   display: inline-flex;

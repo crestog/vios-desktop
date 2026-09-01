@@ -26,7 +26,7 @@
  * neighbourhood, then pivot, is a shorter path than any sentence.
  */
 
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { CornerUpRight } from 'lucide-react';
 import { frameUrl, type VisualHit } from '../lib/api';
 import { href } from '../lib/router';
@@ -36,12 +36,16 @@ export interface FrameHitsProps {
   hits: VisualHit[];
   /** Why the list is empty — four causes look identical without this. */
   reason?: string;
+  /** The same thing as a fixed token. Branch on this, never on `reason`. */
+  cause?: string;
   error?: string | null;
   first?: boolean;
   loading?: boolean;
   q?: string;
   /** True when the query was a frame rather than a phrase. */
   byFrame?: boolean;
+  /** True when the query was an uploaded or pasted picture. */
+  byImage?: boolean;
   /** Search again from this frame. Absent means the pivot is not offered. */
   onPivot?: (videoKey: string, t: number) => void;
 }
@@ -49,11 +53,13 @@ export interface FrameHitsProps {
 export default function FrameHits({
   hits,
   reason,
+  cause,
   error,
   first,
   loading,
   q,
   byFrame,
+  byImage,
   onPivot,
 }: FrameHitsProps) {
   const { lo, span, reels } = useMemo(() => {
@@ -87,27 +93,98 @@ export default function FrameHits({
   }
 
   if (!hits.length) {
-    // A phrase has to pass through the model's text tower; a frame does not.
-    // When the tower is what is missing, saying "no frames matched" is true and
-    // useless — the archive is full of frames and none of them were compared.
-    // So name the cause and name the mode that does not need it.
-    const noModel = !byFrame && /torch|transformers|module|encoder|model/i.test(reason || '');
+    // Branch on `cause`, never on `reason`. This block used to test the prose
+    // against /torch|transformers|module|encoder|model/i, and
+    // `AttributeError: 'BaseModelOutputWithPooling' object has no attribute
+    // 'norm'` matched on the word *Model* inside a class name — so a bug in the
+    // encode path was rendered as "the model is not installed here", and the
+    // advice was to download something that was already loaded and working.
+    //
+    // The two that look alike and are opposites: `no_encoder` means a model is
+    // genuinely absent and fetching one fixes it; `encode_failed` means a model
+    // is loaded and this code raised, which no download will touch.
+    const box = ((): { head: string; body: ReactNode } => {
+      switch (cause) {
+        case 'no_encoder':
+          return {
+            head: 'That search needs a model',
+            body: (
+              <>
+                Searching frames {byImage ? <em>by picture</em> : <em>by phrase</em>} runs the
+                query through the image model{byImage ? '' : "'s text tower"}, and it could not
+                be loaded here — {reason}. Searching <em>by an existing frame</em> needs no
+                model at all: open any reel, and use &ldquo;frames like this moment&rdquo;.
+              </>
+            ),
+          };
+        case 'encode_failed':
+          return {
+            head: 'The model is loaded — encoding the query broke',
+            body: (
+              <>
+                Nothing is missing and no download fixes this: the encoder loaded, and the
+                call into it raised — {reason}. That is a fault in this build, and the
+                server log has the traceback. Meanwhile <em>by an existing frame</em> still
+                works, because it compares vectors already in the database.
+              </>
+            ),
+          };
+        case 'no_vision_tower':
+          return {
+            head: 'Searching by picture needs the vision tower',
+            body: (
+              <>
+                {reason}. The frame pivot is the way through — open any reel and use
+                &ldquo;frames like this moment&rdquo;, which compares vectors already stored
+                and needs nothing installed.
+              </>
+            ),
+          };
+        case 'bad_image':
+          return {
+            head: 'That file could not be read as an image',
+            body: <>{reason}. PNG, JPEG and WebP all work; try a screenshot.</>,
+          };
+        case 'no_index':
+          return {
+            head: 'The image index is not built',
+            body: (
+              <>
+                {reason} — no frame vectors are resident, so there was nothing to compare
+                against. This builds itself as shards import; a scan that has not reached
+                the frame payloads yet leaves the lane empty.
+              </>
+            ),
+          };
+        case 'no_vectors':
+          return {
+            head: 'That reel has no frame vectors',
+            body: (
+              <>
+                {reason}. Its frames were never embedded — a reel captured before the frame
+                tier ran, or one whose payload did not import.
+              </>
+            ),
+          };
+        default:
+          return {
+            head: 'No frames matched',
+            body: (
+              <>
+                {reason ||
+                  (byFrame
+                    ? 'Every embedded frame in the archive was compared against that one, and none of them is close enough to show.'
+                    : 'Either nothing in the frames resembles that, or the image index has not been built for these reels yet.')}
+              </>
+            ),
+          };
+      }
+    })();
+
     return (
       <div className="state-box">
-        <div className="head">{noModel ? 'That search needs a model' : 'No frames matched'}</div>
-        <div>
-          {noModel ? (
-            <>
-              Searching frames <em>by phrase</em> runs the words through the image model's text
-              tower, and it is not installed here — {reason}. Searching{' '}
-              <em>by an existing frame</em> needs no model at all: open any reel, and use
-              &ldquo;frames like this moment&rdquo;.
-            </>
-          ) : (
-            reason ||
-            'Either nothing in the frames resembles that, or the image index has not been built for these reels yet.'
-          )}
-        </div>
+        <div className="head">{box.head}</div>
+        <div>{box.body}</div>
       </div>
     );
   }
